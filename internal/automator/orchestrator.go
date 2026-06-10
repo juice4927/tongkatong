@@ -22,10 +22,11 @@ type CheckinOrchestrator struct {
 	scheduler     *CheckinScheduler
 	baseDir       string
 
-	checkinTimes   map[string]time.Time
-	dailyResults   []CheckinRecord
-	scheduledDate  time.Time
-	runningJobIDs  map[string]bool
+	checkinTimes    map[string]time.Time
+	dailyResults    []CheckinRecord
+	scheduledDate   time.Time
+	runningJobIDs   map[string]bool
+	rescheduleTimer *time.Timer // 每日 00:01 重调度定时器
 }
 
 // CheckinRecord 打卡记录
@@ -71,6 +72,13 @@ func (co *CheckinOrchestrator) Start() {
 func (co *CheckinOrchestrator) Stop() {
 	co.mu.Lock()
 	defer co.mu.Unlock()
+
+	// 取消每日重调度定时器
+	if co.rescheduleTimer != nil {
+		co.rescheduleTimer.Stop()
+		co.rescheduleTimer = nil
+	}
+
 	co.scheduler.Stop()
 	co.checkinTimes = make(map[string]time.Time)
 }
@@ -170,16 +178,26 @@ func (co *CheckinOrchestrator) scheduleToday(source string) {
 }
 
 func (co *CheckinOrchestrator) setupDailyReschedule() {
-	// 每日 00:01 重调度
 	now := time.Now()
 	nextMidnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 1, 0, 0, now.Location())
 	delay := time.Until(nextMidnight)
 
-	time.AfterFunc(delay, func() {
+	co.mu.Lock()
+	if co.rescheduleTimer != nil {
+		co.rescheduleTimer.Stop()
+	}
+	co.rescheduleTimer = time.AfterFunc(delay, func() {
+		co.mu.Lock()
+		isRunning := co.scheduler.IsRunning()
+		co.mu.Unlock()
+		if !isRunning {
+			return // 已停止，不再重调度
+		}
 		slog.Info("跨日重调度")
 		co.scheduleToday("crossday")
 		co.setupDailyReschedule()
 	})
+	co.mu.Unlock()
 }
 
 func (co *CheckinOrchestrator) isInMakeupWindow(jobID string, now time.Time) bool {

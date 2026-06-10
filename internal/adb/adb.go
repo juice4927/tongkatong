@@ -2,7 +2,6 @@
 package adb
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"log/slog"
@@ -57,11 +56,15 @@ func (a *ADBHelper) GetADBPath() string {
 	return a.adbPath
 }
 
-// runCommand 执行 adb 命令，返回 (success, stdout)
+// runCommand 执行 adb 命令，返回 (success, stdout_string)
 func (a *ADBHelper) runCommand(args []string, timeout time.Duration) (bool, string) {
-	cmd := exec.Command(a.adbPath, args...)
+	ok, stdout, _ := a.runCommandRaw(args, timeout)
+	return ok, string(stdout)
+}
 
-	// Windows: 隐藏窗口
+// runCommandRaw 执行 adb 命令，返回 (success, stdout_bytes, stderr_bytes)
+func (a *ADBHelper) runCommandRaw(args []string, timeout time.Duration) (bool, []byte, []byte) {
+	cmd := exec.Command(a.adbPath, args...)
 	hideWindow(cmd)
 
 	var stdout, stderr bytes.Buffer
@@ -69,7 +72,7 @@ func (a *ADBHelper) runCommand(args []string, timeout time.Duration) (bool, stri
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return false, fmt.Sprintf("启动命令失败: %v", err)
+		return false, nil, []byte(fmt.Sprintf("启动命令失败: %v", err))
 	}
 
 	done := make(chan error, 1)
@@ -80,12 +83,12 @@ func (a *ADBHelper) runCommand(args []string, timeout time.Duration) (bool, stri
 	select {
 	case err := <-done:
 		if err != nil {
-			return false, strings.TrimSpace(stderr.String())
+			return false, stdout.Bytes(), stderr.Bytes()
 		}
-		return true, strings.TrimSpace(stdout.String())
+		return true, stdout.Bytes(), stderr.Bytes()
 	case <-time.After(timeout):
 		_ = cmd.Process.Kill()
-		return false, "命令超时"
+		return false, nil, []byte("命令超时")
 	}
 }
 
@@ -95,9 +98,7 @@ func (a *ADBHelper) Version() string {
 	if !ok {
 		return ""
 	}
-	scanner := bufio.NewScanner(strings.NewReader(out))
-	for scanner.Scan() {
-		line := scanner.Text()
+	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "Android Debug Bridge") {
 			return line
 		}
@@ -113,8 +114,7 @@ func (a *ADBHelper) Devices() []DeviceInfo {
 	}
 
 	var devices []DeviceInfo
-	lines := strings.Split(out, "\n")
-	for _, line := range lines[1:] { // 跳过标题行
+	for _, line := range strings.Split(out, "\n")[1:] {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -151,68 +151,68 @@ func (a *ADBHelper) Disconnect(host string, port int) {
 	slog.Info("已断开设备", "address", address)
 }
 
-// Shell 执行 shell 命令
+// Shell 执行 shell 命令（返回 stdout 字符串）
 func (a *ADBHelper) Shell(device string, command string, timeout time.Duration) (bool, string) {
 	args := []string{}
 	if device != "" {
 		args = append(args, "-s", device)
 	}
 	args = append(args, "shell", command)
-
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	return a.runCommand(args, timeout)
 }
 
-// Screencap 截屏（返回 PNG 字节）
+// Screencap 截屏（返回原始 PNG 字节，不做字符串转换）
 func (a *ADBHelper) Screencap(device string) ([]byte, error) {
-	ok, out := a.Shell(device, "screencap -p 2>/dev/null", 15*time.Second)
-	if !ok {
-		return nil, fmt.Errorf("截屏失败: %s", out)
+	args := []string{}
+	if device != "" {
+		args = append(args, "-s", device)
 	}
-	// adb shell screencap 输出可能包含终端控制字符，需要清理
-	clean := cleanScreencapOutput([]byte(out))
-	return clean, nil
+	args = append(args, "shell", "screencap -p")
+
+	ok, stdout, stderr := a.runCommandRaw(args, 15*time.Second)
+	if !ok {
+		return nil, fmt.Errorf("截屏失败: %s", string(stderr))
+	}
+	// 清理可能附带的换行/空字节前缀
+	data := bytes.TrimLeft(stdout, "\x00\r\n ")
+	// 查找 PNG 文件头
+	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47}
+	if idx := bytes.Index(data, pngHeader); idx > 0 {
+		data = data[idx:]
+	}
+	if len(data) == 0 || !bytes.HasPrefix(data, pngHeader) {
+		return nil, fmt.Errorf("截屏数据不是有效的 PNG（%d bytes）", len(data))
+	}
+	return data, nil
 }
 
 // DumpHierarchy 获取 UI hierarchy XML
 func (a *ADBHelper) DumpHierarchy(device string) (string, error) {
-	// 先执行 dump
-	ok, err := a.Shell(device, "uiautomator dump /dev/tty 2>/dev/null || uiautomator dump /sdcard/ui.xml 2>/dev/null", 15*time.Second)
-	if !ok || strings.Contains(err, "error") {
-		// 尝试备用方式
-		ok2, err2 := a.Shell(device, "uiautomator dump /sdcard/ui.xml", 15*time.Second)
-		if !ok2 {
-			return "", fmt.Errorf("dump hierarchy 失败: %s", err2)
-		}
-		_ = err // 忽略
-		_ = err2
-
-		// 从设备拉取文件
-		ok3, out3 := a.runCommand([]string{"-s", device, "shell", "cat", "/sdcard/ui.xml"}, 10*time.Second)
-		if ok3 {
-			return out3, nil
-		}
-		return "", fmt.Errorf("读取 hierarchy XML 失败: %s", out3)
+	// 方式1：直接输出到 stdout（Android 7+ 支持 uiautomator dump /dev/tty）
+	ok, stdout := a.Shell(device, "uiautomator dump /dev/tty", 15*time.Second)
+	if ok && strings.Contains(stdout, "<") && strings.Contains(stdout, "node") {
+		return stdout, nil
 	}
-	return err, nil
-}
 
-// 清理 screencap 输出中的终端控制字符
-func cleanScreencapOutput(data []byte) []byte {
-	// 查找 PNG 文件头
-	pngHeader := []byte{0x89, 0x50, 0x4E, 0x47}
-	idx := bytes.Index(data, pngHeader)
-	if idx > 0 {
-		return data[idx:]
+	// 方式2：写文件再读取
+	ok2, _ := a.Shell(device, "uiautomator dump /sdcard/ui.xml", 15*time.Second)
+	if !ok2 {
+		return "", fmt.Errorf("dump hierarchy 失败")
 	}
-	return data
-}
 
-// ── Windows 隐藏窗口 ────────────────────────────────────────────────
+	// 从设备读取文件
+	readArgs := []string{}
+	if device != "" {
+		readArgs = append(readArgs, "-s", device)
+	}
+	readArgs = append(readArgs, "shell", "cat /sdcard/ui.xml")
 
-var hideWindow = func(cmd *exec.Cmd) {
-	// 在 Windows 上设置 CREATE_NO_WINDOW
-	// 通过 build tags 实现，详见 adb_windows.go
+	ok3, out3 := a.runCommand(readArgs, 10*time.Second)
+	if ok3 {
+		return out3, nil
+	}
+	return "", fmt.Errorf("读取 hierarchy XML 失败: %s", out3)
 }

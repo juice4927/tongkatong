@@ -270,9 +270,14 @@ func merge(dst, src *Config) *Config {
 	dst.MakeupWindow = mergeMakeupWindow(dst.MakeupWindow, src.MakeupWindow)
 	dst.Advanced = mergeAdvanced(dst.Advanced, src.Advanced)
 
-	// Checkin map：以 src 为准（替换整个 map）
+	// Checkin map：逐条目合并，不覆盖用户未提供的条目
 	if src.Checkin != nil {
-		dst.Checkin = src.Checkin
+		if dst.Checkin == nil {
+			dst.Checkin = make(map[string]CheckinEntry)
+		}
+		for k, v := range src.Checkin {
+			dst.Checkin[k] = v
+		}
 	}
 
 	return dst

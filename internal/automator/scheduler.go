@@ -15,6 +15,7 @@ type CheckinScheduler struct {
 	mu        sync.Mutex
 	cron      *cron.Cron
 	jobs      map[string]*ScheduledJob
+	entries   map[string]cron.EntryID // jobID → cron.EntryID
 	running   bool
 }
 
@@ -29,7 +30,8 @@ type ScheduledJob struct {
 // NewCheckinScheduler 创建调度器
 func NewCheckinScheduler() *CheckinScheduler {
 	return &CheckinScheduler{
-		jobs: make(map[string]*ScheduledJob),
+		jobs:    make(map[string]*ScheduledJob),
+		entries: make(map[string]cron.EntryID),
 	}
 }
 
@@ -67,8 +69,8 @@ func (s *CheckinScheduler) Stop() {
 		ctx := s.cron.Stop()
 		<-ctx.Done()
 		s.running = false
-		// 清理本地缓存
 		s.jobs = make(map[string]*ScheduledJob)
+		s.entries = make(map[string]cron.EntryID)
 		slog.Info("调度器已停止")
 	}
 }
@@ -83,17 +85,16 @@ func (s *CheckinScheduler) AddOnceJob(jobID string, runAt time.Time, callback fu
 		return false
 	}
 
-	// 移除已存在的同名任务
+	// 移除旧的 cron entry 和本地缓存
 	s.removeJobLocked(jobID)
 
-	// 计算延迟
 	delay := time.Until(runAt)
 	if delay < 0 {
 		slog.Warn("任务时间已过，跳过", "job", jobID, "runAt", runAt)
 		return false
 	}
 
-	cronExpr := formatCronExpr(runAt)
+	cronExpr := runAt.Format("05 04 15 02 01 *")
 	entryID, err := s.cron.AddFunc(cronExpr, callback)
 	if err != nil {
 		slog.Error("添加任务失败", "job", jobID, "error", err)
@@ -106,9 +107,7 @@ func (s *CheckinScheduler) AddOnceJob(jobID string, runAt time.Time, callback fu
 		Status:   "pending",
 		Callback: callback,
 	}
-
-	// 移除时用 entryID
-	_ = entryID
+	s.entries[jobID] = entryID
 
 	slog.Info("添加定时任务", "job", jobID, "runAt", runAt.Format("15:04:05"), "delay", delay.Round(time.Second))
 	return true
@@ -122,11 +121,13 @@ func (s *CheckinScheduler) RemoveJob(jobID string) {
 }
 
 func (s *CheckinScheduler) removeJobLocked(jobID string) {
-	// cron v3 没有直接通过 ID 移除的方法，我们通过本地缓存管理
-	if _, exists := s.jobs[jobID]; exists {
-		delete(s.jobs, jobID)
-		slog.Debug("移除任务", "job", jobID)
+	// 从 cron 调度器中移除
+	if entryID, ok := s.entries[jobID]; ok && s.cron != nil {
+		s.cron.Remove(entryID)
+		delete(s.entries, jobID)
 	}
+	// 从本地缓存中移除
+	delete(s.jobs, jobID)
 }
 
 // GetJobs 获取所有任务
@@ -156,13 +157,4 @@ func (s *CheckinScheduler) IsRunning() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.running
-}
-
-// formatCronExpr 将 time.Time 格式化为 cron 表达式（秒 分 时 日 月 周）
-func formatCronExpr(t time.Time) string {
-	return formatTime(t)
-}
-
-func formatTime(t time.Time) string {
-	return t.Format("05 04 15 02 01 *")
 }

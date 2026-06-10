@@ -3,6 +3,7 @@ package adb
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -135,11 +136,9 @@ func (m *MuMuHelper) StopMuMu() (bool, string) {
 }
 
 func fileExists(path string) bool {
-	_, err := exec.LookPath(path)
-	if err == nil {
-		return true
+	if path == "" {
+		return false
 	}
-	// exec.LookPath 对绝对路径检查可能不准确，用 os.Stat 备用
-	_, err = exec.Command("cmd", "/c", "if", "exist", path, "echo", "1").Output()
+	_, err := os.Stat(path)
 	return err == nil
 }
