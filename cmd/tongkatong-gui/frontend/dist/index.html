@@ -732,7 +732,7 @@ function setupEvents(){try{if(!window.runtime||!window.runtime.EventsOn)return;
   // 状态更新
   E('status',(s)=>{if(s){status.is_connected=!!s.is_connected;status.is_running=!!s.is_running;if(s.devices)status.devices=s.devices}});
 
-}}catch(e){console.warn('Events:',e)}
+}catch(e){console.warn('Events:',e)}}
 
 return{
   version,activeTab,tabs,status,dailyResults,logLines,logText,packages,connecting,refreshing,autoScroll,logEl,
