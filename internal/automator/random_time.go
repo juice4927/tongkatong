@@ -17,8 +17,9 @@ func GenerateRandomTime(startTime, endTime string, extraMinSeconds, extraMaxSeco
 	endMinutes := eh*60 + em
 
 	var targetMinutes int
-	if endMinutes > startMinutes {
-		targetMinutes = startMinutes + rand.Intn(endMinutes-startMinutes)
+	delta := endMinutes - startMinutes
+	if delta > 1 {
+		targetMinutes = startMinutes + rand.Intn(delta)
 	} else {
 		targetMinutes = startMinutes
 	}
@@ -27,8 +28,9 @@ func GenerateRandomTime(startTime, endTime string, extraMinSeconds, extraMaxSeco
 
 	if extraMaxSeconds > 0 && extraMinSeconds >= 0 {
 		extra := extraMinSeconds
-		if extraMaxSeconds > extraMinSeconds {
-			extra += rand.Intn(extraMaxSeconds - extraMinSeconds + 1)
+		extraDelta := extraMaxSeconds - extraMinSeconds
+		if extraDelta > 0 {
+			extra += rand.Intn(extraDelta + 1)
 		}
 		baseTime = baseTime.Add(time.Duration(extra) * time.Second)
 	}
@@ -49,5 +51,10 @@ func parseTimeStr(s string) (int, int) {
 	if len(s) < 5 || s[2] != ':' {
 		return 0, 0
 	}
-	return int(s[0]-'0')*10 + int(s[1]-'0'), int(s[3]-'0')*10 + int(s[4]-'0')
+	h := int(s[0]-'0')*10 + int(s[1]-'0')
+	m := int(s[3]-'0')*10 + int(s[4]-'0')
+	if h < 0 || h > 23 || m < 0 || m > 59 {
+		return 0, 0
+	}
+	return h, m
 }

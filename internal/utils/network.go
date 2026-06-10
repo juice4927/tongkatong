@@ -38,9 +38,11 @@ func CheckNetworkConnectivity(probes []struct{ Host string; Port int }, timeout 
 			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 			if err == nil {
 				conn.Close()
-				resultCh <- true
-			} else {
-				resultCh <- false
+			}
+			// 非阻塞发送，防止主函数提前返回后 goroutine 永久阻塞
+			select {
+			case resultCh <- (err == nil):
+			default:
 			}
 		}(target.Host, target.Port)
 	}

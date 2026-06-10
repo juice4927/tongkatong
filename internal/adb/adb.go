@@ -152,6 +152,11 @@ func (a *ADBHelper) Disconnect(host string, port int) {
 }
 
 // Shell 执行 shell 命令（返回 stdout 字符串）
+//
+// 安全警告：command 参数通过 adb shell 在 Android 设备上直接执行。
+// 调用者必须在传入前校验所有用户可控部分的合法性（如包名、文件名），
+// 防止 shell 元字符（; | & ` $() 等）注入。
+// 推荐使用 packageNamePattern 正则 (`^[a-zA-Z][a-zA-Z0-9._]*$`) 校验包名。
 func (a *ADBHelper) Shell(device string, command string, timeout time.Duration) (bool, string) {
 	args := []string{}
 	if device != "" {
