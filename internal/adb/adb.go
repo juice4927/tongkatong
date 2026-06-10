@@ -215,3 +215,26 @@ func (a *ADBHelper) DumpHierarchy(device string) (string, error) {
 	}
 	return "", fmt.Errorf("读取 hierarchy XML 失败: %s", out3)
 }
+
+// GetDeviceInfo 获取设备信息（品牌、型号、Android版本）
+func (a *ADBHelper) GetDeviceInfo(device string) map[string]string {
+	info := make(map[string]string)
+
+	for _, prop := range []struct{ key, label string }{
+		{"ro.product.brand", "brand"},
+		{"ro.product.model", "model"},
+		{"ro.build.version.release", "android_version"},
+		{"ro.build.version.sdk", "sdk_version"},
+	} {
+		args := []string{}
+		if device != "" {
+			args = append(args, "-s", device)
+		}
+		args = append(args, "shell", "getprop", prop.key)
+		ok, out := a.runCommand(args, 5*time.Second)
+		if ok {
+			info[prop.label] = strings.TrimSpace(out)
+		}
+	}
+	return info
+}

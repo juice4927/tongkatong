@@ -36,7 +36,7 @@ func TestCheckinVerifier_HandleConfirmDialog_Failure(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for failure dialog")
 	}
-	if err.Error() != "打卡失败: 超出距离" {
+	if err.Error() != "打卡失败(GPS): 超出距离" {
 		t.Errorf("unexpected error message: %s", err.Error())
 	}
 }

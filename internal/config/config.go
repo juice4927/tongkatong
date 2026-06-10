@@ -265,11 +265,68 @@ func (cm *ConfigManager) loadMerged() *Config {
 		applyFile(cm.configFile)
 	}
 
+	// 标准化打卡配置（补全缺失字段、校验降级）
+	normalizeCheckin(cfg)
+
+	// 备份损坏的配置文件
+	if err := cm.backupIfCorrupted(); err != nil {
+		slog.Warn("配置备份失败", "error", err)
+	}
+
 	if !userExists {
 		_ = cm.writeConfig(cfg)
 	}
 
 	return cfg
+}
+
+// normalizeCheckin 标准化打卡配置：补全缺失标签、校验时间格式、降级无效值
+func normalizeCheckin(cfg *Config) {
+	for key, entry := range cfg.Checkin {
+		if entry.Label == "" {
+			switch key {
+			case "morning_signin":
+				entry.Label = "上午签到"
+			case "morning_signout":
+				entry.Label = "上午签退"
+			case "afternoon_signin":
+				entry.Label = "下午签到"
+			case "afternoon_signout":
+				entry.Label = "下午签退"
+			default:
+				entry.Label = key
+			}
+		}
+		if len(entry.TimeRange) != 2 {
+			entry.TimeRange = []string{"00:00", "00:00"}
+		}
+		for i := range entry.TimeRange {
+			if !isValidHHMM(entry.TimeRange[i]) {
+				entry.TimeRange[i] = "00:00"
+			}
+		}
+		cfg.Checkin[key] = entry
+	}
+}
+
+// backupIfCorrupted 备份用户配置（.json.bak）防止写入损坏
+func (cm *ConfigManager) backupIfCorrupted() error {
+	if _, err := os.Stat(cm.configFile); os.IsNotExist(err) {
+		return nil
+	}
+	data, err := os.ReadFile(cm.configFile)
+	if err != nil {
+		return nil // 读失败，不备份
+	}
+	// 简单验证：是否有效 JSON
+	if json.Valid(data) {
+		return nil // 有效，不需要备份
+	}
+	// 无效 JSON → 备份
+	backupPath := cm.configFile + ".bak"
+	slog.Warn("检测到损坏的配置文件，创建备份", "backup", backupPath)
+	_ = os.WriteFile(backupPath, data, 0644)
+	return os.Rename(cm.configFile, cm.configFile+".corrupted")
 }
 
 // mergeInto 将 src 合并到 dst，只覆盖 rawMap 中显式指定的顶级字段

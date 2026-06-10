@@ -38,16 +38,29 @@ func (v *CheckinVerifier) HandleConfirmDialog(timeout int) error {
 			continue
 		}
 
-		// 检测失败弹窗
-		failKeywords := []string{"超出距离", "不在打卡范围", "定位失败", "网络异常", "打卡失败"}
+		// 检测失败弹窗 — 区分GPS错误 vs 其他错误
+		gpsFailKeywords := []string{"超出距离", "不在打卡范围", "定位失败", "请先定位"}
+		for _, kw := range gpsFailKeywords {
+			if strings.Contains(xml, kw) {
+				slog.Warn("检测到GPS定位错误弹窗", "keyword", kw)
+				v.dialogHandler.ClickButtonByText([]string{"确定", "知道了", "关闭"})
+				return &CheckinError{Message: "打卡失败(GPS): " + kw, FailureCode: string(models.GpsRuntimeFailed)}
+			}
+		}
+
+		failKeywords := []string{"网络异常", "打卡失败", "签到失败", "签退失败"}
 		for _, kw := range failKeywords {
 			if strings.Contains(xml, kw) {
 				slog.Warn("检测到打卡失败弹窗", "keyword", kw)
-				// 关闭弹窗
 				v.dialogHandler.ClickButtonByText([]string{"确定", "知道了", "关闭"})
-				// 失败弹窗返回错误
 				return &CheckinError{Message: "打卡失败: " + kw, FailureCode: string(models.OutsideRange)}
 			}
+		}
+
+		// 等待"加载中"消失
+		if strings.Contains(xml, "加载中") || strings.Contains(xml, "loading") {
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 
 		// 检测成功弹窗 — 只记录成功状态，不关闭弹窗（留给 DefaultVerify 再次确认）

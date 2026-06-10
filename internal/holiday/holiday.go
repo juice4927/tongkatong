@@ -178,6 +178,23 @@ func (hc *HolidayChecker) GetHolidayName(checkDate time.Time) string {
 	return ""
 }
 
+// GetNextWorkday 获取下一个工作日
+func (hc *HolidayChecker) GetNextWorkday(fromDate time.Time) time.Time {
+	d := fromDate
+	for i := 0; i < 14; i++ { // 最多往前找14天
+		d = d.AddDate(0, 0, 1)
+		if hc.IsWorkday(d) {
+			return d
+		}
+	}
+	// 降级：返回下周周一
+	daysUntilMonday := (8 - int(fromDate.Weekday())) % 7
+	if daysUntilMonday == 0 {
+		daysUntilMonday = 7
+	}
+	return fromDate.AddDate(0, 0, daysUntilMonday)
+}
+
 // ── 内部 ───────────────────────────────────────────────────────────
 
 func (hc *HolidayChecker) loadData() error {

@@ -98,11 +98,9 @@ func (n *Navigator) NavigateToCheckin() (bool, string) {
 	// 第一级恢复：返回主界面重试
 	slog.Warn("导航失败，尝试返回主界面重试")
 	n.lastRecovery = "return_home_retry"
-	n.device.CloseApp(n.packageName)
-	time.Sleep(2 * time.Second)
-	n.device.OpenApp(n.packageName)
-	time.Sleep(3 * time.Second)
-	n.DismissNavigationDialogs()
+	if !n.ReturnToAppMainPageForRetry() {
+		slog.Error("返回主界面失败")
+	}
 
 	if n.tryNavigateWorkbenchToCheckin(3) {
 		return true, n.lastRecovery
@@ -111,11 +109,9 @@ func (n *Navigator) NavigateToCheckin() (bool, string) {
 	// 第二级恢复：重启 APP 重试
 	slog.Warn("导航再次失败，尝试重启 APP")
 	n.lastRecovery = "restart_app_retry"
-	n.device.CloseApp(n.packageName)
-	time.Sleep(2 * time.Second)
-	n.device.OpenApp(n.packageName)
-	time.Sleep(5 * time.Second)
-	n.DismissNavigationDialogs()
+	if !n.RestartAppForRetry() {
+		slog.Error("重启APP失败")
+	}
 
 	if n.tryNavigateWorkbenchToCheckin(3) {
 		return true, n.lastRecovery
@@ -158,19 +154,46 @@ func (n *Navigator) tryNavigateWorkbenchToCheckin(maxAttempts int) bool {
 }
 
 // ReturnToHome 打卡完成后返回工作台
-//
-//	使用 ADB keyevent KEYCODE_BACK 逐层返回直到看到"工作台"入口
 func (n *Navigator) ReturnToHome() {
+	// 先关闭可能的弹窗
+	n.DismissNavigationDialogs()
 	for i := 0; i < 8; i++ {
 		if n.device.TextExists("工作台") {
 			slog.Debug("已回到工作台页面")
 			return
 		}
-		// 发送系统返回键 (KEYCODE_BACK = 4)
 		if err := n.device.SendKeyEvent(4); err != nil {
 			slog.Warn("发送返回键失败", "error", err)
 		}
 		time.Sleep(1 * time.Second)
 	}
 	slog.Debug("返回工作台操作完成（已达最大重试次数）")
+}
+
+// ReturnToAppMainPageForRetry 逐层back回到主界面（用于导航恢复第一级）
+func (n *Navigator) ReturnToAppMainPageForRetry() bool {
+	// 逐层返回直到看到"工作台"或到最大次数
+	for i := 0; i < 6; i++ {
+		if n.device.TextExists("工作台") {
+			slog.Info("已回到应用主界面")
+			return true
+		}
+		if err := n.device.SendKeyEvent(4); err != nil {
+			slog.Warn("返回键失败", "error", err)
+		}
+		time.Sleep(800 * time.Millisecond)
+	}
+	// 走到这里说明back也没用，直接重启
+	slog.Warn("返回主界面失败，回退到重启策略")
+	return false
+}
+
+// RestartAppForRetry 重启应用（用于导航恢复第二级）
+func (n *Navigator) RestartAppForRetry() bool {
+	n.device.CloseApp(n.packageName)
+	time.Sleep(2 * time.Second)
+	n.device.OpenApp(n.packageName)
+	time.Sleep(5 * time.Second)
+	n.DismissNavigationDialogs()
+	return true
 }

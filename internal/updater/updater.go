@@ -296,9 +296,48 @@ func ConsumeUpdateState(baseDir string) *UpdateState {
 	if err != nil {
 		return nil
 	}
-	// 删除状态文件（消费）
 	_ = os.Remove(filepath.Join(baseDir, UpdateStateFile))
 	return state
+}
+
+// DescribeUpdateState 返回更新状态的可读描述
+func DescribeUpdateState(baseDir string) string {
+	state, err := ReadUpdateState(baseDir)
+	if err != nil {
+		return "暂无更新记录"
+	}
+	return fmt.Sprintf("%s → %s: %s (%s)", state.PreviousVersion, state.TargetVersion, state.Status, state.Detail)
+}
+
+// SilentCheckAndPreDownload 后台静默检查并预下载更新
+// 返回 (是否可用, 下载路径, 错误)
+func SilentCheckAndPreDownload(manifestURL, currentVersion, edition string) (bool, string, error) {
+	asset, needsUpdate, err := CheckUpdate(manifestURL, currentVersion, edition)
+	if err != nil || !needsUpdate {
+		return false, "", err
+	}
+
+	// 预下载到临时目录
+	tmpDir := filepath.Join(os.TempDir(), UpdateTempDir)
+	_ = os.MkdirAll(tmpDir, 0755)
+	destPath := filepath.Join(tmpDir, asset.FileName)
+
+	// 如果已下载且 SHA256 一致，跳过
+	if hash, err := SHA256File(destPath); err == nil && hash == asset.SHA256 {
+		return true, destPath, nil
+	}
+
+	hash, err := DownloadFile(asset.URL, destPath, nil)
+	if err != nil {
+		return false, "", fmt.Errorf("预下载失败: %w", err)
+	}
+
+	if asset.SHA256 != "" && hash != asset.SHA256 {
+		_ = os.Remove(destPath)
+		return false, "", fmt.Errorf("SHA256 校验失败: 预期 %s, 实际 %s", asset.SHA256, hash)
+	}
+
+	return true, destPath, nil
 }
 
 // ── 更新启动器 ────────────────────────────────────────────────────
