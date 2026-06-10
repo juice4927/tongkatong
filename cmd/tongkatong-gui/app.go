@@ -337,6 +337,10 @@ func (a *App) ConnectDevice() string {
 			a.initEngine(cfg)
 			cfg.MuMu.Port = port
 			_ = a.configManager.SaveConfig(cfg)
+
+			// 连接成功后：打开APP + 登录检测 + 自动启动
+			a.postConnect(cfg, false)
+
 			runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
 			return fmt.Sprintf("连接成功: %s (端口 %d)", msg, port)
 		}
@@ -357,12 +361,64 @@ func (a *App) ConnectDevice() string {
 			a.initEngine(cfg)
 			cfg.MuMu.Port = port
 			_ = a.configManager.SaveConfig(cfg)
+
+			// MuMu 启动后连接成功：打开APP + 登录检测 + 自动启动
+			a.postConnect(cfg, true)
+
 			runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
 			return fmt.Sprintf("连接成功: %s (MuMu 已自动启动, 端口 %d)", msg, port)
 		}
 	}
 
 	return fmt.Sprintf("连接失败: MuMu 已启动但 ADB 连接超时 (已尝试端口: %v)", ports)
+}
+
+// postConnect 连接后的统一处理：打开APP + 登录检测 + 自动启动调度
+func (a *App) postConnect(cfg *config.Config, wasLaunched bool) {
+	// 打开交建通APP
+	pkg := cfg.App.PackageName
+	slog.Info("正在打开应用", "package", pkg)
+	opened := a.automator.OpenApp(pkg)
+	if opened {
+		slog.Info("应用已启动", "package", pkg)
+		time.Sleep(3 * time.Second) // 等 APP 完全加载
+
+		// 登录检测
+		slog.Info("检查登录状态...")
+		if err := a.automator.HandleLoginIfNeeded(60); err != nil {
+			slog.Warn("登录检测未通过", "error", err)
+		} else {
+			slog.Info("应用已就绪")
+		}
+
+		// 获取设备信息推送到前端
+		info := a.adbHelper.GetDeviceInfo("")
+		if len(info) > 0 {
+			runtime.EventsEmit(a.ctx, "device_info", info)
+		}
+	} else {
+		slog.Warn("应用启动失败", "package", pkg)
+	}
+
+	// 如果是从守护恢复过来的且之前期望运行，自动启动
+	a.mu.Lock()
+	wasRecover := a.recovery.inProgress
+	a.mu.Unlock()
+
+	if wasRecover && a.desiredRunning {
+		slog.Info("守护恢复：重新启动调度")
+		a.recovery.mu.Lock()
+		a.recovery.inProgress = false
+		a.recovery.mu.Unlock()
+		a.StartScheduler()
+		return
+	}
+
+	// 连接成功后，若开启了自动启动且非恢复流程，自动启动调度
+	if !wasRecover && cfg.AppState.AutoStart {
+		slog.Info("自动启动已开启，启动调度")
+		a.StartScheduler()
+	}
 }
 
 func uniquePorts(configured int) []int {
@@ -439,6 +495,13 @@ func (a *App) StartScheduler() string {
 	a.desiredRunning = true
 	a.mu.Unlock()
 	runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
+
+	// 推送打卡时间窗口到前端
+	go func() {
+		time.Sleep(500 * time.Millisecond) // 等调度器初始化完成
+		times := a.GetCheckinTimes()
+		runtime.EventsEmit(a.ctx, "checkin_times", times)
+	}()
 
 	// 如果是从恢复流程中启动的，标记成功
 	if a.recovery.inProgress {

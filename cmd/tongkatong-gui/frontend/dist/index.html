@@ -696,7 +696,17 @@ function getCheckinRange(key){const ct=checkinTimes[key];return ct&&ct.time_rang
 function getSlotClass(key){const ct=checkinTimes[key];return ct&&ct.enabled?'metric-ok':'metric-info'}
 
 // Events
-function setupEvents(){try{if(window.runtime&&window.runtime.EventsOn){window.runtime.EventsOn('log',(d)=>{if(d&&d.message)addLog(d.level||'INFO',d.message)})}}catch(e){}}
+function setupEvents(){try{if(window.runtime&&window.runtime.EventsOn){
+  window.runtime.EventsOn('log',(d)=>{if(d&&d.message)addLog(d.level||'INFO',d.message)});
+  // 打卡时间窗口推送
+  window.runtime.EventsOn('checkin_times',(times)=>{if(times&&typeof times==='object'){for(const[k,v]of Object.entries(times)){if(!checkinTimes[k])checkinTimes[k]={enabled:v.enabled!==false,time_range:[...(v.time_range||['00:00','00:00'])],label:v.label||k};else if(v.time_range){checkinTimes[k].time_range=[...v.time_range];checkinTimes[k].enabled=v.enabled!==false}}addLog('INFO','打卡时间窗口已更新')}});
+  // 设备信息推送
+  window.runtime.EventsOn('device_info',(info)=>{if(info)addLog('INFO','设备: '+(info.brand||'')+' '+(info.model||'')+' Android '+(info.android_version||'?'))});
+  // 守护状态推送
+  window.runtime.EventsOn('guard_status',(s)=>{if(s){guardStatus.value=s.in_progress?'恢复中':(s.desired_running?'守护中':'待机');runningJobCount.value=s.fail_count||0}});
+  // 每日结果推送
+  window.runtime.EventsOn('daily_result',(r)=>{if(r){const found=dailyResults.value.findIndex(x=>x.timestamp===r.timestamp);if(found>=0)dailyResults.value[found]=r;else dailyResults.value.unshift(r);if(dailyResults.value.length>20)dailyResults.value=dailyResults.value.slice(0,20);addLog('INFO','打卡结果: '+(r.success?'✓':'✗')+' '+r.action_name)}});
+}}}catch(e){console.warn('Events setup:',e)}
 
 return{
   version,activeTab,tabs,status,dailyResults,logLines,logText,packages,connecting,refreshing,autoScroll,logEl,
