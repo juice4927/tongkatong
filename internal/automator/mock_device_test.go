@@ -2,6 +2,7 @@ package automator
 
 import (
 	"sync"
+	"time"
 )
 
 // mockDeviceOperator 模拟 DeviceOperator 接口，用于单元测试
@@ -119,4 +120,19 @@ func (m *mockDeviceOperator) WindowSize() (width, height int, err error) {
 func (m *mockDeviceOperator) SendKeyEvent(keyCode int) error {
 	m.recordCall("SendKeyEvent", map[string]interface{}{"keyCode": keyCode})
 	return m.sendKeyEvent(keyCode)
+}
+
+func (m *mockDeviceOperator) WaitForUIReady(timeout time.Duration, minNodes int) bool {
+	m.recordCall("WaitForUIReady", map[string]interface{}{"timeout": timeout, "minNodes": minNodes})
+	return true
+}
+
+func (m *mockDeviceOperator) IsLoggedIn() bool {
+	m.recordCall("IsLoggedIn", nil)
+	return true
+}
+
+func (m *mockDeviceOperator) IsOnLoginPage() bool {
+	m.recordCall("IsOnLoginPage", nil)
+	return false
 }

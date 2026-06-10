@@ -26,7 +26,11 @@ type CheckinOrchestrator struct {
 	dailyResults    []CheckinRecord
 	scheduledDate   time.Time
 	runningJobIDs   map[string]bool
-	rescheduleTimer *time.Timer // 每日 00:01 重调度定时器
+	rescheduleTimer *time.Timer
+
+	// 最近一次结果（用于恢复判断）
+	lastResult     *models.CheckinResult
+	lastResultMeta string
 }
 
 // CheckinRecord 打卡记录
@@ -35,6 +39,7 @@ type CheckinRecord struct {
 	Success    bool
 	Message    string
 	Timestamp  string
+	FailureCode string
 }
 
 // NewCheckinOrchestrator 创建打卡协调器
@@ -231,6 +236,27 @@ func (co *CheckinOrchestrator) isInMakeupWindow(jobID string, now time.Time) boo
 	return nowMinutes >= startMinutes && nowMinutes < endMinutes
 }
 
+// ── 结果查询 ────────────────────────────────────────────────────
+
+// GetLastResult 获取最近一次打卡结果
+func (co *CheckinOrchestrator) GetLastResult() *models.CheckinResult {
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	return co.lastResult
+}
+
+// ShouldRetryCode 判断失败码是否应该触发自动重试
+func ShouldRetryCode(fc string) bool {
+	switch models.FailureCode(fc) {
+	case models.DeviceConnectFailed, models.DeviceUnresponsive, models.DeviceConnectionFailed,
+		models.NavigationFailed, models.ButtonNotFound, models.NetworkError, models.AppPopupFailed,
+		models.CheckinFailed, models.GpsRuntimeFailed:
+		return true
+	default:
+		return false
+	}
+}
+
 // ── 执行打卡 ───────────────────────────────────────────────────────
 
 func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label string) {
@@ -256,7 +282,7 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 		time.Sleep(30 * time.Second)
 		if !utils.CheckNetworkConnectivity(nil, 5*time.Second) {
 			slog.Error("网络仍不可用，跳过本次打卡")
-			co.recordResult(label, false, "网络不可用", time.Now().Format("2006-01-02 15:04:05"))
+			co.recordResult(label, false, "网络不可用", time.Now().Format("2006-01-02 15:04:05"), string(models.NetworkError))
 			return
 		}
 	}
@@ -280,28 +306,39 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 	result, err := co.automator.DoCheckin(action)
 	if err != nil {
 		slog.Error("打卡异常", "label", label, "error", err)
-		co.recordResult(label, false, "异常: "+err.Error(), time.Now().Format("2006-01-02 15:04:05"))
+		co.recordResult(label, false, "异常: "+err.Error(), time.Now().Format("2006-01-02 15:04:05"), string(models.SystemError))
 		return
 	}
+
+	co.mu.Lock()
+	co.lastResult = result
+	if result.Success {
+		co.lastResultMeta = "success"
+	} else {
+		co.lastResultMeta = result.FailureCode
+	}
+	co.mu.Unlock()
 
 	co.recordResult(
 		result.Action,
 		result.Success,
 		result.Message,
 		result.Timestamp,
+		result.FailureCode,
 	)
 
 	// 打卡结果通知
 	co.notifyResult(result)
 }
 
-func (co *CheckinOrchestrator) recordResult(actionName string, success bool, message, timestamp string) {
+func (co *CheckinOrchestrator) recordResult(actionName string, success bool, message, timestamp, failureCode string) {
 	co.mu.Lock()
 	co.dailyResults = append(co.dailyResults, CheckinRecord{
 		ActionName: actionName,
 		Success:    success,
 		Message:    message,
 		Timestamp:  timestamp,
+		FailureCode: failureCode,
 	})
 	co.mu.Unlock()
 

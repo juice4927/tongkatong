@@ -270,6 +270,70 @@ func (u *UIAutomator2Impl) SendKeyEvent(keyCode int) error {
 	return nil
 }
 
+// ── UI 就绪检测 ──────────────────────────────────────────────────
+
+// WaitForUIReady 等待 UI 层级加载完成（至少 minNodes 个节点）
+func (u *UIAutomator2Impl) WaitForUIReady(timeout time.Duration, minNodes int) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		xml, err := u.DumpHierarchy()
+		if err != nil {
+			continue
+		}
+		nodes := ParseHierarchyXML(xml)
+		if len(nodes) >= minNodes {
+			return true
+		}
+	}
+	return false
+}
+
+// IsLoggedIn 检查是否已在交建通主界面（非登录页）
+func (u *UIAutomator2Impl) IsLoggedIn() bool {
+	xml, err := u.DumpHierarchy()
+	if err != nil {
+		return false
+	}
+	// 检测工作台/考勤入口是否存在
+	lower := strings.ToLower(xml)
+	return strings.Contains(lower, "工作台") || strings.Contains(lower, "考勤")
+}
+
+// IsOnLoginPage 检测是否在登录页面
+func (u *UIAutomator2Impl) IsOnLoginPage() bool {
+	xml, err := u.DumpHierarchy()
+	if err != nil {
+		return false
+	}
+	lower := strings.ToLower(xml)
+	return strings.Contains(lower, "登录") || strings.Contains(lower, "login") ||
+		strings.Contains(lower, "手机号") || strings.Contains(lower, "验证码")
+}
+
+// HandleLoginIfNeeded 如果需要登录则等待用户手动登录
+func (u *UIAutomator2Impl) HandleLoginIfNeeded(waitSeconds int) error {
+	if !u.IsOnLoginPage() && u.IsLoggedIn() {
+		return nil // 已登录，无需处理
+	}
+
+	if !u.IsOnLoginPage() && !u.IsLoggedIn() {
+		// 既不在登录页也不在主界面 → 可能应用未启动
+		return fmt.Errorf("应用状态异常：不在登录页也不在主界面")
+	}
+
+	slog.Info("检测到登录页面，等待手动登录", "max_wait", waitSeconds)
+	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(3 * time.Second)
+		if !u.IsOnLoginPage() && u.IsLoggedIn() {
+			slog.Info("用户已登录")
+			return nil
+		}
+	}
+	return fmt.Errorf("登录超时（%d秒），请先手动登录交建通", waitSeconds)
+}
+
 // SetGPS 通过 MuMuManager 设置 GPS 虚拟定位
 func (u *UIAutomator2Impl) SetGPS(latitude, longitude float64) error {
 	if latitude == 0 && longitude == 0 {

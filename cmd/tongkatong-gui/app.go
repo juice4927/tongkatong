@@ -20,6 +20,59 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
+// ── 恢复状态 ─────────────────────────────────────────────────
+
+type recoveryState struct {
+	mu             sync.Mutex
+	inProgress     bool
+	failCount      int
+	nextRetryAt    time.Time
+	startedAt      time.Time
+	pausedUntil    time.Time
+	lastAction     string
+	lastReason     string
+	lastResult     string
+	lastError      string
+	lastRecoveryAt time.Time
+}
+
+func (r *recoveryState) markFailed(reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failCount++
+	r.lastReason = reason
+	r.lastResult = "failed"
+	r.lastError = reason
+	r.lastRecoveryAt = time.Now()
+}
+
+func (r *recoveryState) markSucceeded() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failCount = 0
+	r.lastResult = "success"
+	r.lastRecoveryAt = time.Now()
+	r.inProgress = false
+}
+
+func (r *recoveryState) snapshot() map[string]interface{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	next := ""
+	if !r.nextRetryAt.IsZero() {
+		next = r.nextRetryAt.Format("2006-01-02 15:04:05")
+	}
+	return map[string]interface{}{
+		"fail_count":      r.failCount,
+		"in_progress":     r.inProgress,
+		"next_retry_at":   next,
+		"last_action":     r.lastAction,
+		"last_result":     r.lastResult,
+		"last_error":      r.lastError,
+		"last_recovery_at": r.lastRecoveryAt.Format("2006-01-02 15:04:05"),
+	}
+}
+
 // App Wails 后端应用
 type App struct {
 	mu              sync.Mutex
@@ -33,8 +86,14 @@ type App struct {
 	holidayChecker  *holiday.HolidayChecker
 	orchestrator    *automator.CheckinOrchestrator
 
-	isConnected     bool
-	isRunning       bool
+	isConnected    bool
+	isRunning      bool
+	desiredRunning bool // 用户意图：是否希望保持运行状态
+	pendingRecover bool // 恢复流程挂起标记
+
+	recovery *recoveryState
+
+	guardStopCh chan struct{} // 守护协程退出信号
 }
 
 // NewApp 创建 App 实例
@@ -42,6 +101,7 @@ func NewApp(cm *config.ConfigManager, baseDir string) *App {
 	return &App{
 		configManager: cm,
 		baseDir:       baseDir,
+		recovery:      &recoveryState{},
 	}
 }
 
@@ -58,10 +118,30 @@ func (a *App) startup(ctx context.Context) {
 	})
 
 	slog.Info("GUI 启动完成")
+
+	// 启动守护协程（每15秒检查连接/运行状态）
+	a.guardStopCh = make(chan struct{})
+	go a.keepAliveGuard()
+
+	// 自动连接
+	cfg := a.configManager.Config()
+	if cfg.AppState.AutoConnect {
+		go func() {
+			time.Sleep(500 * time.Millisecond) // 等窗口完全渲染
+			a.ConnectDevice()
+			if cfg.AppState.AutoStart && a.isConnected {
+				a.StartScheduler()
+			}
+		}()
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
 	slog.Info("GUI 正在退出...")
+	// 停止守护协程
+	if a.guardStopCh != nil {
+		close(a.guardStopCh)
+	}
 	if a.orchestrator != nil {
 		a.orchestrator.Stop()
 	}
@@ -69,7 +149,86 @@ func (a *App) shutdown(ctx context.Context) {
 		a.automator.Disconnect()
 	}
 	utils.GetLogManager().Close()
-	_ = ctx
+}
+
+// ── 守护逻辑 ─────────────────────────────────────────────────
+
+func (a *App) keepAliveGuard() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.guardStopCh:
+			return
+		case <-ticker.C:
+			a.guardTick()
+		}
+	}
+}
+
+func (a *App) guardTick() {
+	a.mu.Lock()
+	connected := a.isConnected
+	running := a.isRunning
+	desired := a.desiredRunning
+	a.mu.Unlock()
+
+	cfg := a.configManager.Config()
+	if !cfg.AppState.KeepAliveEnabled {
+		return
+	}
+
+	// 未连接但期望运行 → 尝试恢复连接
+	if !connected && desired {
+		slog.Info("守护：检测到断开，尝试恢复连接")
+		a.recovery.mu.Lock()
+		a.recovery.inProgress = true
+		a.recovery.lastAction = "reconnect"
+		a.recovery.mu.Unlock()
+
+		a.ConnectDevice()
+
+		a.mu.Lock()
+		reconnected := a.isConnected
+		a.mu.Unlock()
+
+		if reconnected && desired {
+			slog.Info("守护：已恢复连接，尝试重启调度")
+			a.StartScheduler()
+		}
+		return
+	}
+
+	// 已连接但未运行且期望运行 → 恢复调度
+	if connected && !running && desired {
+		slog.Info("守护：调度未运行，尝试重启")
+		a.StartScheduler()
+		return
+	}
+
+	// 推送状态事件
+	a.recovery.mu.Lock()
+	snap := a.recovery.snapshot()
+	a.recovery.mu.Unlock()
+	runtime.EventsEmit(a.ctx, "guard_status", snap)
+}
+
+// GetGuardStatus 返回守护状态快照
+func (a *App) GetGuardStatus() map[string]interface{} {
+	a.mu.Lock()
+	connected := a.isConnected
+	running := a.isRunning
+	desired := a.desiredRunning
+	a.mu.Unlock()
+
+	cfg := a.configManager.Config()
+	snap := a.recovery.snapshot()
+	snap["keep_alive_enabled"] = cfg.AppState.KeepAliveEnabled
+	snap["is_connected"] = connected
+	snap["is_running"] = running
+	snap["desired_running"] = desired
+	return snap
 }
 
 // ── 获取信息 ──────────────────────────────────────────────────────
@@ -108,7 +267,8 @@ func (a *App) GetStatus() map[string]interface{} {
 	return map[string]interface{}{
 		"is_connected": a.isConnected,
 		"is_running":   a.isRunning,
-		"devices":      devices,
+		"desired_running": a.desiredRunning,
+		"devices":       devices,
 	}
 }
 
@@ -133,7 +293,6 @@ func (a *App) GetCheckinTimes() map[string]interface{} {
 func (a *App) ConnectDevice() string {
 	cfg := a.configManager.Config()
 
-	// 初始化 ADB（自动查找 MuMu 自带的 adb）
 	a.adbHelper = adb.NewADBHelper(cfg.MuMu.AdbPath)
 	a.mumuHelper = adb.NewMuMuHelper(cfg.MuMu.AdbPath, cfg.MuMu.MuMuExePath)
 	a.devicePool = adb.NewDevicePool(a.adbHelper, time.Duration(cfg.Advanced.SessionTTLSeconds)*time.Second)
@@ -145,38 +304,38 @@ func (a *App) ConnectDevice() string {
 		a.mumuHelper = adb.NewMuMuHelper(foundPath, cfg.MuMu.MuMuExePath)
 	}
 
-	// 端口候选项（匹配 Python 版：配置端口 → 7555 → 5555）
 	ports := uniquePorts(cfg.MuMu.Port)
 
-	// 第一阶段：直接尝试连接各端口
 	for _, port := range ports {
 		ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, port)
 		if ok {
+			a.mu.Lock()
 			a.isConnected = true
+			a.mu.Unlock()
 			a.initEngine(cfg)
-			// 用实际连接的端口更新配置
 			cfg.MuMu.Port = port
 			_ = a.configManager.SaveConfig(cfg)
+			runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
 			return fmt.Sprintf("连接成功: %s (端口 %d)", msg, port)
 		}
-		slog.Info("端口连接失败，尝试下一个", "port", port, "msg", msg)
+		slog.Info("端口连接失败", "port", port, "msg", msg)
 	}
 
-	// 第二阶段：所有端口失败 → 尝试启动 MuMu
-	slog.Info("所有端口连接失败，尝试启动 MuMu 模拟器")
 	launched, launchMsg := a.mumuHelper.LaunchMuMu(a.adbHelper, cfg.MuMu.Host, cfg.MuMu.Port, 60)
 	if !launched {
 		return "连接失败: " + launchMsg
 	}
 
-	// MuMu 已启动，重新尝试所有端口
 	for _, port := range ports {
 		ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, port)
 		if ok {
+			a.mu.Lock()
 			a.isConnected = true
+			a.mu.Unlock()
 			a.initEngine(cfg)
 			cfg.MuMu.Port = port
 			_ = a.configManager.SaveConfig(cfg)
+			runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
 			return fmt.Sprintf("连接成功: %s (MuMu 已自动启动, 端口 %d)", msg, port)
 		}
 	}
@@ -220,19 +379,28 @@ func (a *App) DisconnectDevice() string {
 	if a.automator != nil {
 		a.automator.Disconnect()
 	}
+	a.mu.Lock()
 	a.isConnected = false
+	a.desiredRunning = false
+	a.pendingRecover = false
+	a.recovery.inProgress = false
+	a.mu.Unlock()
+	runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
 	return "已断开"
 }
 
 // StartScheduler 启动打卡调度
 func (a *App) StartScheduler() string {
+	a.mu.Lock()
 	if !a.isConnected {
+		a.mu.Unlock()
 		return "请先连接设备"
 	}
-
 	if a.isRunning {
+		a.mu.Unlock()
 		return "调度已在运行中"
 	}
+	a.mu.Unlock()
 
 	if a.orchestrator == nil {
 		a.orchestrator = automator.NewCheckinOrchestrator(
@@ -244,7 +412,18 @@ func (a *App) StartScheduler() string {
 	}
 
 	a.orchestrator.Start()
+	a.mu.Lock()
 	a.isRunning = true
+	a.desiredRunning = true
+	a.mu.Unlock()
+	runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
+
+	// 如果是从恢复流程中启动的，标记成功
+	if a.recovery.inProgress {
+		a.recovery.markSucceeded()
+		runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
+	}
+
 	return "调度已启动"
 }
 
@@ -253,7 +432,12 @@ func (a *App) StopScheduler() string {
 	if a.orchestrator != nil {
 		a.orchestrator.Stop()
 	}
+	a.mu.Lock()
 	a.isRunning = false
+	a.desiredRunning = false
+	a.pendingRecover = false
+	a.mu.Unlock()
+	runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
 	return "调度已停止"
 }
 
@@ -282,11 +466,29 @@ func (a *App) ManualCheckin(action string) string {
 		return "打卡异常: " + err.Error()
 	}
 
+	a.recordCheckinResult(checkinAction, result)
+	return formatResult(result)
+}
+
+func (a *App) recordCheckinResult(action automator.CheckinAction, result *models.CheckinResult) {
+	cfg := a.configManager.Config()
+	utils.RecordCheckinResult(a.baseDir, result.Action, result.Success, result.Message, result.Timestamp)
+	if cfg.Notification.Enabled {
+		notifyCfg := utils.NotifyConfig{
+			Enabled:   cfg.Notification.Enabled,
+			Webhook:   cfg.Notification.Webhook,
+			VerifyTLS: cfg.Notification.VerifyTLS,
+		}
+		utils.NotifyCheckinResult(notifyCfg, result.Action, result.Success, result.Message, result.Timestamp)
+	}
+}
+
+func formatResult(result *models.CheckinResult) string {
 	status := "成功"
 	if !result.Success {
 		status = "失败"
 	}
-	return "打卡" + status + ": " + result.Message
+	return fmt.Sprintf("打卡%s: %s [%s]", status, result.Message, result.Timestamp)
 }
 
 // CheckHoliday 判断今天是否工作日
@@ -305,7 +507,6 @@ func (a *App) CheckHoliday(dateStr string) map[string]interface{} {
 		isWorkday = a.holidayChecker.IsWorkday(date)
 		holidayName = a.holidayChecker.GetHolidayName(date)
 	} else {
-		// 降级判断
 		weekday := date.Weekday()
 		isWorkday = weekday != time.Saturday && weekday != time.Sunday
 	}
@@ -343,6 +544,11 @@ func (a *App) SaveConfig(jsonStr string) string {
 		return "配置解析失败: " + err.Error()
 	}
 
+	// 保留 app_state 的运行时状态
+	oldCfg := a.configManager.Config()
+	newCfg.AppState.AutoConnect = oldCfg.AppState.AutoConnect
+	newCfg.AppState.AutoStart = oldCfg.AppState.AutoStart
+
 	if err := a.configManager.SaveConfig(&newCfg); err != nil {
 		return "配置保存失败: " + err.Error()
 	}
@@ -367,7 +573,6 @@ func (a *App) GetAvailablePackages() []string {
 	if a.adbHelper == nil {
 		return nil
 	}
-	// 使用当前连接的设备（adb shell 默认选唯一设备，多设备时需指定）
 	serial := ""
 	devices := a.adbHelper.Devices()
 	for _, d := range devices {
@@ -406,23 +611,6 @@ func (a *App) TestConnection() string {
 	return "连接失败: " + msg
 }
 
-// GetDefaultConfig 返回默认配置 JSON
-func (a *App) GetDefaultConfig() string {
-	return config.DefaultConfigJSON()
-}
-
-// CheckHolidayUpdate 检查并更新节假日数据
-func (a *App) CheckHolidayUpdate() string {
-	if a.holidayChecker == nil {
-		return "请先连接设备"
-	}
-	ok := a.holidayChecker.TryUpdateFromRemote("https://raw.githubusercontent.com/juice4927/holiday-china/main/holidays.json")
-	if ok {
-		return "节假日数据已更新"
-	}
-	return "节假日数据已是最新或无网络"
-}
-
 // BrowseFile 打开原生文件选择器，返回选定文件路径（空串=取消）
 func (a *App) BrowseFile() string {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
@@ -447,6 +635,23 @@ func (a *App) BrowseDirectory() string {
 		return ""
 	}
 	return path
+}
+
+// GetDefaultConfig 返回默认配置 JSON
+func (a *App) GetDefaultConfig() string {
+	return config.DefaultConfigJSON()
+}
+
+// CheckHolidayUpdate 检查并更新节假日数据
+func (a *App) CheckHolidayUpdate() string {
+	if a.holidayChecker == nil {
+		return "请先连接设备"
+	}
+	ok := a.holidayChecker.TryUpdateFromRemote("https://raw.githubusercontent.com/juice4927/holiday-china/main/holidays.json")
+	if ok {
+		return "节假日数据已更新"
+	}
+	return "节假日数据已是最新或无网络"
 }
 
 // GetLogContent 获取日志文件内容

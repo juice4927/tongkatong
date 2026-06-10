@@ -28,6 +28,9 @@ type DeviceOperator interface {
 	Screenshot() ([]byte, error)
 	WindowSize() (width, height int, err error)
 	SendKeyEvent(keyCode int) error
+	WaitForUIReady(timeout time.Duration, minNodes int) bool
+	IsLoggedIn() bool
+	IsOnLoginPage() bool
 }
 
 // NewNavigator 创建导航器
