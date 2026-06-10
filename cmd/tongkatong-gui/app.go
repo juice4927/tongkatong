@@ -344,10 +344,25 @@ func (a *App) GetCheckinTimes() map[string]interface{} {
 	return result
 }
 
-// ── 操作 ──────────────────────────────────────────────────────────
+// ── 操作（异步执行，通过事件推结果到前端）─────────────────────
 
-// ConnectDevice 连接设备（匹配 Python 版逻辑：多端口尝试 + 自动启动 MuMu）
-func (a *App) ConnectDevice() string {
+// ConnectDeviceAsync 异步连接设备（不阻塞UI，通过事件推送结果）
+func (a *App) ConnectDeviceAsync() string {
+	go func() {
+		msg := a.connectDeviceSync()
+		runtime.EventsEmit(a.ctx, "connect_result", map[string]interface{}{
+			"success": a.isConnected,
+			"message": msg,
+		})
+		// 刷新状态推送到前端
+		time.Sleep(200 * time.Millisecond)
+		a.emitStatus()
+	}()
+	return "connecting"
+}
+
+// connectDeviceSync 同步连接设备（在 goroutine 中执行）
+func (a *App) connectDeviceSync() string {
 	cfg := a.configManager.Config()
 
 	a.adbHelper = adb.NewADBHelper(cfg.MuMu.AdbPath)
@@ -361,8 +376,9 @@ func (a *App) ConnectDevice() string {
 		a.mumuHelper = adb.NewMuMuHelper(foundPath, cfg.MuMu.MuMuExePath)
 	}
 
-	ports := uniquePorts(cfg.MuMu.Port)
+	runtime.EventsEmit(a.ctx, "connect_progress", map[string]interface{}{"step": "trying_ports"})
 
+	ports := uniquePorts(cfg.MuMu.Port)
 	for _, port := range ports {
 		ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, port)
 		if ok {
@@ -372,23 +388,20 @@ func (a *App) ConnectDevice() string {
 			a.initEngine(cfg)
 			cfg.MuMu.Port = port
 			_ = a.configManager.SaveConfig(cfg)
-
-			// 连接成功后：打开APP + 登录检测 + 自动启动
 			a.postConnect(cfg, false)
-
 			runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
-			return fmt.Sprintf("连接成功: %s (端口 %d)", msg, port)
+			return fmt.Sprintf("连接成功 (%s, 端口 %d)", msg, port)
 		}
-		slog.Info("端口连接失败", "port", port, "msg", msg)
 	}
 
+	runtime.EventsEmit(a.ctx, "connect_progress", map[string]interface{}{"step": "launching_mumu"})
 	launched, launchMsg := a.mumuHelper.LaunchMuMu(a.adbHelper, cfg.MuMu.Host, cfg.MuMu.Port, 60)
 	if !launched {
 		return "连接失败: " + launchMsg
 	}
 
 	for _, port := range ports {
-		ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, port)
+		ok, _ := a.adbHelper.Connect(cfg.MuMu.Host, port)
 		if ok {
 			a.mu.Lock()
 			a.isConnected = true
@@ -396,16 +409,72 @@ func (a *App) ConnectDevice() string {
 			a.initEngine(cfg)
 			cfg.MuMu.Port = port
 			_ = a.configManager.SaveConfig(cfg)
-
-			// MuMu 启动后连接成功：打开APP + 登录检测 + 自动启动
 			a.postConnect(cfg, true)
-
 			runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
-			return fmt.Sprintf("连接成功: %s (MuMu 已自动启动, 端口 %d)", msg, port)
+			return fmt.Sprintf("连接成功，MuMu已自动启动 (端口 %d)", port)
 		}
 	}
+	return "连接失败: 所有端口不可达"
+}
 
-	return fmt.Sprintf("连接失败: MuMu 已启动但 ADB 连接超时 (已尝试端口: %v)", ports)
+// emitStatus 推送当前状态到前端
+func (a *App) emitStatus() {
+	runtime.EventsEmit(a.ctx, "status", a.GetStatus())
+	runtime.EventsEmit(a.ctx, "dashboard", a.getDashboardData())
+}
+
+// getDashboardData 获取仪表盘数据
+func (a *App) getDashboardData() map[string]interface{} {
+	a.mu.Lock()
+	connected := a.isConnected
+	running := a.isRunning
+	a.mu.Unlock()
+
+	cfg := a.configManager.Config()
+	results := a.GetDailyResults()
+	hi := a.CheckHoliday("")
+	times := a.GetCheckinTimes()
+
+	return map[string]interface{}{
+		"is_connected": connected,
+		"is_running":   running,
+		"daily_results": results,
+		"holiday":      hi,
+		"checkin_times": times,
+		"devices":      a.getDevices(),
+		"config": map[string]interface{}{
+			"host": cfg.MuMu.Host,
+			"port": cfg.MuMu.Port,
+			"package": cfg.App.PackageName,
+		},
+	}
+}
+
+func (a *App) getDevices() []map[string]string {
+	if a.adbHelper == nil {
+		return nil
+	}
+	devices := []map[string]string{}
+	for _, d := range a.adbHelper.Devices() {
+		devices = append(devices, map[string]string{"serial": d.Serial, "status": d.Status})
+	}
+	return devices
+}
+
+// ConnectDevice 同步版本（兼容旧前端调用）—— 委托给异步版本
+func (a *App) ConnectDevice() string {
+	go a.connectDeviceSyncWithCallback()
+	return "connecting"
+}
+
+func (a *App) connectDeviceSyncWithCallback() {
+	msg := a.connectDeviceSync()
+	runtime.EventsEmit(a.ctx, "connect_result", map[string]interface{}{
+		"success": a.isConnected,
+		"message": msg,
+	})
+	time.Sleep(100 * time.Millisecond)
+	a.emitStatus()
 }
 
 // postConnect 连接后的统一处理：打开APP + 登录检测 + 自动启动调度
@@ -522,6 +591,19 @@ func (a *App) StartScheduler() string {
 		if !a.orchestrator.Initialize() {
 			return "调度器初始化失败"
 		}
+
+		// 注册结果回调 → 推送到前端实时显示
+		a.orchestrator.SetResultCallback(func(r automator.CheckinRecord) {
+			runtime.EventsEmit(a.ctx, "daily_result", map[string]interface{}{
+				"action_name": r.ActionName,
+				"success":     r.Success,
+				"message":     r.Message,
+				"timestamp":   r.Timestamp,
+			})
+			// 同时推送完整的仪表盘数据
+			time.Sleep(100 * time.Millisecond)
+			runtime.EventsEmit(a.ctx, "dashboard", a.getDashboardData())
+		})
 	}
 
 	a.orchestrator.Start()
@@ -531,14 +613,12 @@ func (a *App) StartScheduler() string {
 	a.mu.Unlock()
 	runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())
 
-	// 推送打卡时间窗口到前端
+	// 推送仪表盘数据
 	go func() {
-		time.Sleep(500 * time.Millisecond) // 等调度器初始化完成
-		times := a.GetCheckinTimes()
-		runtime.EventsEmit(a.ctx, "checkin_times", times)
+		time.Sleep(500 * time.Millisecond)
+		runtime.EventsEmit(a.ctx, "dashboard", a.getDashboardData())
 	}()
 
-	// 如果是从恢复流程中启动的，标记成功
 	if a.recovery.inProgress {
 		a.recovery.markSucceeded()
 		runtime.EventsEmit(a.ctx, "guard_status", a.recovery.snapshot())

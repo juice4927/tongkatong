@@ -30,9 +30,12 @@ type CheckinOrchestrator struct {
 	runningJobIDs   map[string]bool
 	rescheduleTimer *time.Timer
 
-	// 最近一次结果（用于恢复判断）
 	lastResult     *models.CheckinResult
 	lastResultMeta string
+
+	// 事件回调（供 GUI 层注册）
+	onResult  func(result CheckinRecord)
+	onError   func(jobID string, err error)
 }
 
 // CheckinRecord 打卡记录
@@ -57,6 +60,11 @@ func NewCheckinOrchestrator(automator *UIAutomator2Impl, hc *holiday.HolidayChec
 		dailyResults:   make([]CheckinRecord, 0),
 		runningJobIDs:  make(map[string]bool),
 	}
+}
+
+// SetResultCallback 设置结果回调（每次打卡完成时调用）
+func (co *CheckinOrchestrator) SetResultCallback(cb func(CheckinRecord)) {
+	co.onResult = cb
 }
 
 // Initialize 初始化
@@ -338,6 +346,17 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 
 	// 打卡结果通知
 	co.notifyResult(result)
+
+	// 触发 GUI 回调
+	if co.onResult != nil {
+		go co.onResult(CheckinRecord{
+			ActionName:  result.Action,
+			Success:     result.Success,
+			Message:     result.Message,
+			Timestamp:   result.Timestamp,
+			FailureCode: result.FailureCode,
+		})
+	}
 
 	// 检查是否需要发送每日汇总（当天最后一次打卡完成后）
 	co.maybeSendDailySummary()

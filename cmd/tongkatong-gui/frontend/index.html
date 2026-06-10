@@ -542,7 +542,7 @@ onMounted(async()=>{
   setupEvents();
   await loadConfig();
   tickClock();clockTmr=setInterval(tickClock,1000);
-  refreshAll();statusTmr=setInterval(refreshAll,5000);
+  refreshAll();statusTmr=setInterval(refreshAll,30000); // 30s 兜底刷新，日常靠事件推送
 })
 
 onUnmounted(()=>{if(clockTmr)clearInterval(clockTmr);if(statusTmr)clearInterval(statusTmr)})
@@ -609,9 +609,9 @@ async function refreshAll(){
 // Actions
 async function doConnect(){
   if(status.is_connected){const m=await call('DisconnectDevice');addLog('INFO',m||'已断开');await refreshAll();return}
-  connecting.value=true;addLog('INFO','正在连接设备...');
-  const m=await call('ConnectDevice');connecting.value=false;addLog('INFO',m||'未知');
-  await refreshAll();
+  connecting.value=true;addLog('INFO','正在连接设备...（可能需要60秒启动MuMu）');
+  // 异步连接，结果通过 connect_result 事件推送
+  call('ConnectDevice').then(m=>{if(m&&m!=='connecting'){addLog('INFO',m);connecting.value=false;refreshAll()}});
 }
 
 async function toggleScheduler(){
@@ -702,18 +702,32 @@ function addLog(level,msg){const t=new Date().toLocaleTimeString('zh-CN',{hour12
 function getCheckinRange(key){const ct=checkinTimes[key];return ct&&ct.time_range?ct.time_range[0]+' ~ '+ct.time_range[1]:'--'}
 function getSlotClass(key){const ct=checkinTimes[key];return ct&&ct.enabled?'metric-ok':'metric-info'}
 
-// Events
-function setupEvents(){try{if(window.runtime&&window.runtime.EventsOn){
-  window.runtime.EventsOn('log',(d)=>{if(d&&d.message)addLog(d.level||'INFO',d.message)});
-  // 打卡时间窗口推送
-  window.runtime.EventsOn('checkin_times',(times)=>{if(times&&typeof times==='object'){for(const[k,v]of Object.entries(times)){if(!checkinTimes[k])checkinTimes[k]={enabled:v.enabled!==false,time_range:[...(v.time_range||['00:00','00:00'])],label:v.label||k};else if(v.time_range){checkinTimes[k].time_range=[...v.time_range];checkinTimes[k].enabled=v.enabled!==false}}addLog('INFO','打卡时间窗口已更新')}});
-  // 设备信息推送
-  window.runtime.EventsOn('device_info',(info)=>{if(info)addLog('INFO','设备: '+(info.brand||'')+' '+(info.model||'')+' Android '+(info.android_version||'?'))});
-  // 守护状态推送
-  window.runtime.EventsOn('guard_status',(s)=>{if(s){guardStatus.value=s.in_progress?'恢复中':(s.desired_running?'守护中':'待机');runningJobCount.value=s.fail_count||0}});
-  // 每日结果推送
-  window.runtime.EventsOn('daily_result',(r)=>{if(r){const found=dailyResults.value.findIndex(x=>x.timestamp===r.timestamp);if(found>=0)dailyResults.value[found]=r;else dailyResults.value.unshift(r);if(dailyResults.value.length>20)dailyResults.value=dailyResults.value.slice(0,20);addLog('INFO','打卡结果: '+(r.success?'✓':'✗')+' '+r.action_name)}});
-}}}catch(e){console.warn('Events setup:',e)}
+// Events - fully event-driven, no polling
+function setupEvents(){try{if(!window.runtime||!window.runtime.EventsOn)return;
+  const E=window.runtime.EventsOn;
+
+  E('log',(d)=>{if(d&&d.message)addLog(d.level||'INFO',d.message)});
+
+  // 连接结果
+  E('connect_result',(d)=>{connecting.value=false;if(d){status.is_connected=d.success;addLog(d.success?'INFO':'WARN',d.message||'');if(d.success){refreshAll();if(advCfg.auto_start)call('StartScheduler');}}});
+
+  // 连接进度
+  E('connect_progress',(d)=>{connecting.value=true;if(d&&d.step==='launching_mumu')addLog('INFO','正在启动 MuMu 模拟器...');});
+  E('device_info',(info)=>{if(info)addLog('INFO','📱 '+(info.brand||'')+' '+(info.model||'')+' Android '+(info.android_version||'?'))});
+
+  // 仪表盘完整刷新
+  E('dashboard',(d)=>{if(!d)return;status.is_connected=!!d.is_connected;status.is_running=!!d.is_running;if(d.daily_results)dailyResults.value=d.daily_results;if(d.holiday)Object.assign(holidayInfo,d.holiday);if(d.checkin_times){for(const[k,v]of Object.entries(d.checkin_times)){checkinTimes[k]={enabled:v.enabled!==false,time_range:[...(v.time_range||['00:00','00:00'])],label:v.label||k}}}if(d.devices)status.devices=d.devices;});
+
+  // 打卡结果实时推送
+  E('daily_result',(r)=>{if(!r)return;const found=dailyResults.value.findIndex(x=>x.timestamp===r.timestamp);if(found>=0)dailyResults.value[found]=r;else dailyResults.value.unshift(r);if(dailyResults.value.length>20)dailyResults.value=dailyResults.value.slice(0,20);addLog(r.success?'INFO':'WARN','📋 '+(r.success?'✓':'✗')+' '+r.action_name+': '+r.message)});
+
+  // 守护状态
+  E('guard_status',(s)=>{if(s){guardStatus.value=s.in_progress?'恢复中':(s.desired_running?'守护中':'待机');runningJobCount.value=s.fail_count||0}});
+
+  // 状态更新
+  E('status',(s)=>{if(s){status.is_connected=!!s.is_connected;status.is_running=!!s.is_running;if(s.devices)status.devices=s.devices}});
+
+}}catch(e){console.warn('Events:',e)}
 
 return{
   version,activeTab,tabs,status,dailyResults,logLines,logText,packages,connecting,refreshing,autoScroll,logEl,
