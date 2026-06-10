@@ -459,15 +459,15 @@ input[type=number].form-input{appearance:textfield}
 </div>
 
 <!-- Add Date Dialog -->
-<div class="dialog-overlay" v-if="dlg.show" @click.self="dlg.show=false">
-  <div class="dialog">
-    <h3>添加{{ dlg.dateType==='workday'?'工作日':'休息日' }}</h3>
+<div class="dialog-overlay" v-if="dlgShow" @click.self="closeDlg" @keydown.escape="closeDlg">
+  <div class="dialog" @click.stop>
+    <h3>添加{{ dlgType==='workday'?'工作日':'休息日' }}</h3>
     <div class="dlg-body">
-      <div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" v-model="dlg.startDate"></div>
-      <div class="form-group"><label class="form-label">结束日期</label><input type="date" class="form-input" v-model="dlg.endDate"></div>
+      <div class="form-group"><label class="form-label">开始日期</label><input type="date" class="form-input" v-model="dlgStart"></div>
+      <div class="form-group"><label class="form-label">结束日期</label><input type="date" class="form-input" v-model="dlgEnd"></div>
     </div>
     <div class="dlg-actions">
-      <button class="btn btn-ghost btn-sm" @click="dlg.show=false">取消</button>
+      <button class="btn btn-ghost btn-sm" @click="closeDlg">取消</button>
       <button class="btn btn-primary btn-sm" @click="confirmAddDate">添加</button>
     </div>
   </div>
@@ -529,7 +529,10 @@ const makeupWindow=reactive({morning_signin:{label:'上午签到',data:[4,0,8,0]
 const extraDates=ref([]);
 
 // Dialog
-const dlg=reactive({show:false,dateType:'workday',startDate:'',endDate:''});
+const dlgShow=ref(false);
+const dlgType=ref('workday');
+const dlgStart=ref('');
+const dlgEnd=ref('');
 
 // Get backend API
 let api=null;
@@ -645,17 +648,19 @@ async function detectPackage(){addLog('INFO','检测已安装包...');const pkgs
 async function checkHolidayUpdate(){addLog('INFO','检查节假日更新...');const m=await call('CheckHolidayUpdate');addLog('INFO',m||'完成')}
 
 // Date management
-function showAddDate(type){const d=new Date().toISOString().slice(0,10);dlg.dateType=type;dlg.startDate=d;dlg.endDate=d;dlg.show=true}
+function showAddDate(type){const d=new Date().toISOString().slice(0,10);dlgType.value=type;dlgStart.value=d;dlgEnd.value=d;dlgShow.value=true}
+function closeDlg(){dlgShow.value=false;dlgStart.value='';dlgEnd.value=''}
 function confirmAddDate(){
-  if(!dlg.startDate||!dlg.endDate){addLog('WARN','请选择日期');return}
-  let s=new Date(dlg.startDate),e=new Date(dlg.endDate);
+  if(!dlgStart.value||!dlgEnd.value){addLog('WARN','请选择日期');return}
+  let s=new Date(dlgStart.value),e=new Date(dlgEnd.value);
+  if(isNaN(s.getTime())||isNaN(e.getTime())){addLog('WARN','日期格式无效');return}
   for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){
     const ds=d.toISOString().slice(0,10);
     const ei=extraDates.value.findIndex(x=>x.date===ds);
-    if(ei>=0)extraDates.value[ei].type=dlg.dateType;else extraDates.value.push({type:dlg.dateType,date:ds});
+    if(ei>=0)extraDates.value[ei].type=dlgType.value;else extraDates.value.push({type:dlgType.value,date:ds});
   }
   extraDates.value.sort((a,b)=>a.date.localeCompare(b.date)||(a.type==='workday'?-1:1));
-  saveExtraDatesToCfg();dlg.show=false;
+  saveExtraDatesToCfg();closeDlg();
 }
 function removeExtraDate(){
   if(selExtraDate.value<0){addLog('WARN','请先选中一条日期');return}
@@ -733,7 +738,7 @@ return{
   version,activeTab,tabs,status,dailyResults,logLines,logText,packages,connecting,refreshing,autoScroll,logEl,
   nowStr,dayNum,dateYM,weekdayStr,holidayInfo,nextCheckin,runningJobCount,guardStatus,slotTimes,
   holidayDataStatus,showPkgList,showWebhook,updateStatus,updateAvailable,updateProgress,updateDetail,updateManifestUrl,autoCheckUpdate,selExtraDate,
-  checkinTimes,mumuCfg,appCfg,notifyCfg,holidayCfg,randomDelay,advCfg,makeupWindow,extraDates,dlg,
+  checkinTimes,mumuCfg,appCfg,notifyCfg,holidayCfg,randomDelay,advCfg,makeupWindow,extraDates,dlgShow,dlgType,dlgStart,dlgEnd,closeDlg,
   doConnect,toggleScheduler,doQuit,nowCheckin,testConnection,copyDiag,detectPackage,
   checkHolidayUpdate,showAddDate,confirmAddDate,removeExtraDate,
   saveAllSettings,saveTimeConfig,exportConfig,importConfig,resetAll,
