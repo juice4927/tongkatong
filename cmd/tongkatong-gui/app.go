@@ -159,18 +159,53 @@ func (a *App) domReady(ctx context.Context) {
 func (a *App) onBeforeClose(ctx context.Context) bool {
 	a.mu.Lock()
 	desired := a.desiredRunning
+	running := a.isRunning
 	a.mu.Unlock()
-	if desired {
+
+	// 如果正在运行中，最小化到托盘而不是退出
+	if running || desired {
+		slog.Info("正在运行中，最小化到托盘")
 		runtime.WindowHide(ctx)
-		return false
+		return false // 阻止关闭
 	}
-	return true
+	return true // 允许关闭
+}
+
+// Quit 强制退出（停止一切并关闭）
+func (a *App) Quit() string {
+	slog.Info("用户请求退出...")
+	a.mu.Lock()
+	a.desiredRunning = false
+	a.mu.Unlock()
+
+	if a.orchestrator != nil {
+		a.orchestrator.Stop()
+	}
+	if a.automator != nil {
+		a.automator.Disconnect()
+	}
+	if a.guardStopCh != nil {
+		close(a.guardStopCh)
+	}
+
+	// 延迟退出让日志写完
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		runtime.Quit(a.ctx)
+	}()
+	return "正在退出..."
 }
 
 // HideWindow 手动隐藏窗口到托盘
 func (a *App) HideWindow() string {
 	runtime.WindowHide(a.ctx)
 	return "已最小化到托盘"
+}
+
+// ShowWindow 从托盘恢复窗口
+func (a *App) ShowWindow() string {
+	runtime.WindowShow(a.ctx)
+	return "窗口已恢复"
 }
 
 // ── 守护逻辑 ─────────────────────────────────────────────────

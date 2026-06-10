@@ -454,6 +454,7 @@ input[type=number].form-input{appearance:textfield}
   <button class="btn btn-accent" @click="nowCheckin" :disabled="!status.is_connected">立即打卡</button>
   <span class="spacer" style="flex:1"></span>
   <button class="btn btn-sm btn-ghost" @click="activeTab='settings'">设置</button>
+  <button class="btn btn-sm btn-ghost" @click="doQuit" style="color:#DC2626;border-color:#FECACA">退出</button>
   <button class="btn btn-primary" @click="saveAllSettings">保存配置</button>
 </div>
 
@@ -619,6 +620,12 @@ async function toggleScheduler(){
   await refreshAll()
 }
 
+async function doQuit(){
+  if(!confirm('确定退出通卡通？\n如果正在运行打卡任务，请先停止。')) return;
+  const m=await call('Quit');
+  addLog('INFO',m||'正在退出...');
+}
+
 async function nowCheckin(){
   const k=Object.keys(checkinTimes).find(k=>checkinTimes[k].enabled)||Object.keys(checkinTimes)[0];
   if(!k)return;addLog('INFO','手动执行: '+(checkinTimes[k]?.label||k));
@@ -713,7 +720,7 @@ return{
   nowStr,dayNum,dateYM,weekdayStr,holidayInfo,nextCheckin,runningJobCount,guardStatus,slotTimes,
   holidayDataStatus,showPkgList,showWebhook,updateStatus,updateAvailable,updateProgress,updateDetail,updateManifestUrl,autoCheckUpdate,selExtraDate,
   checkinTimes,mumuCfg,appCfg,notifyCfg,holidayCfg,randomDelay,advCfg,makeupWindow,extraDates,dlg,
-  doConnect,toggleScheduler,nowCheckin,testConnection,copyDiag,detectPackage,
+  doConnect,toggleScheduler,doQuit,nowCheckin,testConnection,copyDiag,detectPackage,
   checkHolidayUpdate,showAddDate,confirmAddDate,removeExtraDate,
   saveAllSettings,saveTimeConfig,exportConfig,importConfig,resetAll,
   browseAdb,browseMumuDir,checkAppUpdate,applyUpdate,refreshUpdateStatus,
