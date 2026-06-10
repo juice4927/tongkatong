@@ -60,6 +60,9 @@ func main() {
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,
+		OnDomReady: app.domReady,
+		// Window: 关闭时最小化到托盘而非退出
+		OnBeforeClose: app.onBeforeClose,
 		Bind: []interface{}{
 			app,
 		},

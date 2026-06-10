@@ -1,7 +1,9 @@
 package automator
 
 import (
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -298,6 +300,13 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 	if cfg.MuMu.GpsLatitude != 0 && cfg.MuMu.GpsLongitude != 0 {
 		if err := co.automator.SetGPS(cfg.MuMu.GpsLatitude, cfg.MuMu.GpsLongitude); err != nil {
 			slog.Warn("GPS 设置失败，继续尝试打卡", "error", err)
+		} else {
+			// GPS 预检：设置后等待 2 秒，检测定位是否生效
+			time.Sleep(2 * time.Second)
+			xml, _ := co.automator.DumpHierarchy()
+			if strings.Contains(xml, "定位失败") || strings.Contains(xml, "请先定位") {
+				slog.Warn("GPS 预检查到定位异常，继续尝试")
+			}
 		}
 	}
 
@@ -329,6 +338,9 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 
 	// 打卡结果通知
 	co.notifyResult(result)
+
+	// 检查是否需要发送每日汇总（当天最后一次打卡完成后）
+	co.maybeSendDailySummary()
 }
 
 func (co *CheckinOrchestrator) recordResult(actionName string, success bool, message, timestamp, failureCode string) {
@@ -354,6 +366,59 @@ func (co *CheckinOrchestrator) notifyResult(result *models.CheckinResult) {
 		VerifyTLS: cfg.Notification.VerifyTLS,
 	}
 	utils.NotifyCheckinResult(notifyCfg, result.Action, result.Success, result.Message, result.Timestamp)
+}
+
+// maybeSendDailySummary 今天最后一次打卡完成后发送每日汇总
+func (co *CheckinOrchestrator) maybeSendDailySummary() {
+	co.mu.Lock()
+	results := make([]CheckinRecord, len(co.dailyResults))
+	copy(results, co.dailyResults)
+	co.mu.Unlock()
+
+	cfg := co.configManager.Config()
+	if !cfg.Notification.Enabled || cfg.Notification.Webhook == "" {
+		return
+	}
+
+	// 检查是否所有启用的打卡时段都已完成
+	allEnabled := 0
+	allDone := 0
+	for _, entry := range cfg.Checkin {
+		if entry.Enabled {
+			allEnabled++
+		}
+	}
+	for _, r := range results {
+		if r.Success {
+			allDone++
+		}
+	}
+	if allEnabled > 0 && allDone >= allEnabled {
+		co.sendDailySummary(results, cfg)
+	}
+}
+
+func (co *CheckinOrchestrator) sendDailySummary(results []CheckinRecord, cfg *config.Config) {
+	today := time.Now().Format("2006-01-02")
+	title := fmt.Sprintf("通卡通 %s 打卡汇总", today)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**日期**：%s\n\n", today))
+	sb.WriteString("**打卡结果**：\n")
+	for _, r := range results {
+		status := "✅"
+		if !r.Success {
+			status = "❌"
+		}
+		sb.WriteString(fmt.Sprintf("- %s %s: %s (%s)\n", status, r.ActionName, r.Message, r.Timestamp))
+	}
+
+	utils.SendServerChan(cfg.Notification.Webhook, title, sb.String(), cfg.Notification.VerifyTLS)
+}
+
+// RescheduleToday 手动触发今日重调度
+func (co *CheckinOrchestrator) RescheduleToday() {
+	co.scheduleToday("manual")
 }
 
 // actionMap 打卡动作映射

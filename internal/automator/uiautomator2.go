@@ -374,23 +374,73 @@ func (u *UIAutomator2Impl) SetGPS(latitude, longitude float64) error {
 		return fmt.Errorf("GPS 设置失败: %v (output: %s)", err, string(output))
 	}
 	slog.Info("GPS 已设置", "lat", latitude, "lon", longitude)
-	return nil
+    return nil
 }
 
 // ── 打卡执行 ───────────────────────────────────────────────────────
 
-// DoCheckin 执行一次完整的打卡流程
+// DoCheckin 执行一次完整的打卡流程（含重试+多策略+分类错误）
 func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResult, error) {
+	return u.doCheckinWithRetry(action, 2)
+}
+
+func (u *UIAutomator2Impl) doCheckinWithRetry(action CheckinAction, maxRetries int) (*models.CheckinResult, error) {
 	_, isSignin, slotLabel := ResolveActionSlot(action)
 	actionText := "签到"
 	if !isSignin {
 		actionText = "签退"
 	}
 
-	slog.Info("开始执行打卡", "action", action, "slot", slotLabel, "text", actionText)
+	var lastResult *models.CheckinResult
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			slog.Info("重试打卡", "attempt", attempt, "max", maxRetries)
+			time.Sleep(30 * time.Second)
+		}
+
+		result, err := u.doCheckinOnce(action, actionText, slotLabel)
+		if err == nil && result != nil && result.Success {
+			return result, nil
+		}
+
+		lastResult = result
+		lastErr = err
+
+		// 不可重试的错误码 → 直接返回
+		if result != nil {
+			if !ShouldRetryCode(result.FailureCode) {
+				slog.Info("错误不可重试，直接返回", "code", result.FailureCode)
+				return result, nil
+			}
+		}
+
+		// 连接错误 → 尝试重连
+		if err != nil {
+			if _, ok := err.(*DeviceConnectionError); ok {
+				slog.Info("设备连接错误，尝试重连")
+				u.Connect()
+			}
+		}
+	}
+
+	if lastResult != nil {
+		return lastResult, lastErr
+	}
+	return &models.CheckinResult{
+		Success:     false,
+		Action:      string(action),
+		Message:     "打卡失败：已达最大重试次数",
+		Timestamp:   time.Now().Format("2006-01-02 15:04:05"),
+		FailureCode: string(models.CheckinFailed),
+	}, lastErr
+}
+
+func (u *UIAutomator2Impl) doCheckinOnce(action CheckinAction, actionText, slotLabel string) (*models.CheckinResult, error) {
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 
-	// 1. 检查是否已连接
+	// 1. 确保连接
 	if !u.IsConnected() {
 		if ok, _ := u.Connect(); !ok {
 			return &models.CheckinResult{
@@ -399,11 +449,16 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 				Message:     "设备未连接",
 				Timestamp:   timestamp,
 				FailureCode: string(models.DeviceNotConnected),
-			}, nil
+			}, &DeviceConnectionError{Message: "设备未连接"}
 		}
 	}
 
-	// 2. 打卡前检查是否已打卡
+	// 2. 等待 UI 就绪
+	if !u.WaitForUIReady(5*time.Second, 10) {
+		slog.Warn("UI 未就绪（节点数不足），继续尝试")
+	}
+
+	// 3. 已打卡检测
 	if IsAlreadyCheckedIn(action, u) {
 		slog.Info("该时段已打卡，跳过")
 		return &models.CheckinResult{
@@ -414,8 +469,7 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 		}, nil
 	}
 
-	// 3. 打开应用
-	slog.Info("打开应用", "package", u.packageName)
+	// 4. 打开应用
 	if !u.OpenApp(u.packageName) {
 		return &models.CheckinResult{
 			Success:     false,
@@ -423,12 +477,22 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 			Message:     "应用启动失败",
 			Timestamp:   timestamp,
 			FailureCode: string(models.AppNotFound),
-		}, nil
+		}, fmt.Errorf("app not found: %s", u.packageName)
 	}
 	time.Sleep(3 * time.Second)
 
-	// 4. 导航到考勤页面
-	slog.Info("导航到考勤页面")
+	// 5. 登录检测
+	if err := u.HandleLoginIfNeeded(60); err != nil {
+		return &models.CheckinResult{
+			Success:     false,
+			Action:      string(action),
+			Message:     "登录超时: " + err.Error(),
+			Timestamp:   timestamp,
+			FailureCode: string(models.LoginTimeout),
+		}, err
+	}
+
+	// 6. 导航到考勤页面
 	navOk, recovery := u.navigator.NavigateToCheckin()
 	if !navOk {
 		return &models.CheckinResult{
@@ -438,23 +502,46 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 			Timestamp:      timestamp,
 			FailureCode:    string(models.NavigationFailed),
 			RecoveryAction: recovery,
-		}, nil
+		}, fmt.Errorf("navigation failed")
 	}
 
-	// 5. 查找并点击打卡按钮
+	// 7. 查找并点击打卡按钮（三策略）
 	slog.Info("查找打卡按钮", "text", actionText)
-	if !u.findAndClickButton(actionText) {
+	found, findErr := FindAndClickButton(action, u)
+	if !found {
+		msg := "未找到打卡按钮"
+		if findErr != nil {
+			msg = findErr.Error()
+		}
+		// 已打卡错误 → 特殊处理
+		if ae, ok := findErr.(*AlreadyCheckedInError); ok {
+			if ae.InCorrectSlot {
+				return &models.CheckinResult{
+					Success: true,
+					Action:  string(action),
+					Message: fmt.Sprintf("该时段已打卡 (%s)", ae.CheckinTime),
+					Timestamp: timestamp,
+				}, nil
+			}
+			return &models.CheckinResult{
+				Success:     false,
+				Action:      string(action),
+				Message:     msg,
+				Timestamp:   timestamp,
+				FailureCode: string(models.AlreadyCheckedIn),
+			}, findErr
+		}
 		return &models.CheckinResult{
 			Success:     false,
 			Action:      string(action),
-			Message:     "未找到打卡按钮",
+			Message:     msg,
 			Timestamp:   timestamp,
 			FailureCode: string(models.ButtonNotFound),
-		}, nil
+		}, findErr
 	}
 	time.Sleep(2 * time.Second)
 
-	// 6. 处理可能出现的确认弹窗（如果弹窗报失败则直接结束）
+	// 8. 处理确认弹窗
 	if err := u.verifier.HandleConfirmDialog(30); err != nil {
 		if chkErr, ok := err.(*CheckinError); ok {
 			return &models.CheckinResult{
@@ -464,26 +551,23 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 				Timestamp:      timestamp,
 				FailureCode:    chkErr.FailureCode,
 				RecoveryAction: u.navigator.LastRecoveryAction(),
-			}, nil
+			}, chkErr
 		}
 	}
 
-	// 7. 验证打卡结果
-	slog.Info("验证打卡结果")
+	// 9. 验证打卡结果
 	success := u.verifier.DefaultVerify(action)
-
 	message := "打卡成功"
 	failureCode := ""
 	if !success {
-		message = "打卡失败"
+		message = "打卡失败：无法确认结果"
 		failureCode = string(models.CheckinFailed)
-		// 保存诊断信息（截图 + XML dump）
 		screenshotFn := func() ([]byte, error) { return u.Screenshot() }
 		xmlFn := func() (string, error) { return u.DumpHierarchy() }
 		utils.SaveFailureDiagnosis(u.baseDir, string(action), screenshotFn, xmlFn)
 	}
 
-	// 8. 返回主页
+	// 10. 返回工作台
 	u.navigator.ReturnToHome()
 
 	return &models.CheckinResult{
@@ -496,61 +580,9 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 	}, nil
 }
 
-// findAndClickButton 查找并点击按钮
-func (u *UIAutomator2Impl) findAndClickButton(text string) bool {
-	xml, err := u.DumpHierarchy()
-	if err != nil {
-		return false
-	}
-
-	nodes := ParseHierarchyXML(xml)
-
-	// 首先尝试直接找可点击的文本按钮
-	for _, n := range nodes {
-		if n.BoundsParsed == nil {
-			continue
-		}
-		if n.Text == text && isClickable(n.Clickable) {
-			slog.Info("找到可点击按钮", "text", text, "bounds", n.Bounds)
-			err := u.Click(n.BoundsParsed.CenterX(), n.BoundsParsed.CenterY())
-			return err == nil
-		}
-	}
-
-	// 策略 A：行锚定法 — 找左侧标签，点击右侧对应区域
-	w, _, _ := u.WindowSize()
-	midX := int(float64(w) * 0.5)
-	for _, n := range nodes {
-		if n.BoundsParsed == nil {
-			continue
-		}
-		if n.Text == text && !isClickable(n.Clickable) && n.BoundsParsed.CenterX() < midX {
-			// 找到左侧标签，点击右侧对应区域
-			labelRect := n.BoundsParsed
-			rightNodes := CollectRightNodes(nodes, labelRect, midX)
-			for _, rn := range rightNodes {
-				if rn.Clickable && rn.Rect != nil {
-					slog.Info("行锚定法：点击右侧时间", "time", rn.Time)
-					err := u.Click(rn.Rect.CenterX(), rn.Rect.CenterY())
-					return err == nil
-				}
-			}
-		}
-	}
-
-	// 策略 C：兜底 — 用 contains 匹配文本，点击任何包含目标文字的可点击元素
-	slog.Info("兜底方案：尝试文本包含匹配", "text", text)
-	for _, n := range nodes {
-		if n.BoundsParsed == nil {
-			continue
-		}
-		if strings.Contains(n.Text, text) {
-			err := u.Click(n.BoundsParsed.CenterX(), n.BoundsParsed.CenterY())
-			if err == nil {
-				return true
-			}
-		}
-	}
-
-	return false
+// DeviceConnectionError 设备连接错误
+type DeviceConnectionError struct {
+	Message string
 }
+
+func (e *DeviceConnectionError) Error() string { return e.Message }

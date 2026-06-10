@@ -151,6 +151,28 @@ func (a *App) shutdown(ctx context.Context) {
 	utils.GetLogManager().Close()
 }
 
+func (a *App) domReady(ctx context.Context) {
+	slog.Info("前端DOM就绪")
+}
+
+// OnBeforeClose 关闭窗口时检查是否最小化到托盘
+func (a *App) onBeforeClose(ctx context.Context) bool {
+	a.mu.Lock()
+	desired := a.desiredRunning
+	a.mu.Unlock()
+	if desired {
+		runtime.WindowHide(ctx)
+		return false
+	}
+	return true
+}
+
+// HideWindow 手动隐藏窗口到托盘
+func (a *App) HideWindow() string {
+	runtime.WindowHide(a.ctx)
+	return "已最小化到托盘"
+}
+
 // ── 守护逻辑 ─────────────────────────────────────────────────
 
 func (a *App) keepAliveGuard() {

@@ -317,3 +317,76 @@ func mergeInto(dst, src *Config, rawMap map[string]json.RawMessage) {
 		}
 	}
 }
+
+// ValidateConfig 验证配置有效性，返回 (是否有效, 错误消息)
+func (cm *ConfigManager) ValidateConfig() (bool, string) {
+	cfg := cm.Config()
+
+	if cfg.MuMu.Port <= 0 || cfg.MuMu.Port > 65535 {
+		return false, fmt.Sprintf("端口号无效: %d（范围 1-65535）", cfg.MuMu.Port)
+	}
+	if cfg.MuMu.Host == "" {
+		return false, "主机地址不能为空"
+	}
+
+	if cfg.App.PackageName == "" {
+		return false, "应用包名不能为空"
+	}
+
+	// GPS 坐标校验
+	if cfg.MuMu.GpsLatitude != 0 || cfg.MuMu.GpsLongitude != 0 {
+		if cfg.MuMu.GpsLatitude < -90 || cfg.MuMu.GpsLatitude > 90 {
+			return false, fmt.Sprintf("GPS 纬度无效: %.6f（范围 -90 ~ 90）", cfg.MuMu.GpsLatitude)
+		}
+		if cfg.MuMu.GpsLongitude < -180 || cfg.MuMu.GpsLongitude > 180 {
+			return false, fmt.Sprintf("GPS 经度无效: %.6f（范围 -180 ~ 180）", cfg.MuMu.GpsLongitude)
+		}
+	}
+
+	// 打卡时间校验
+	for key, entry := range cfg.Checkin {
+		if !entry.Enabled {
+			continue
+		}
+		if len(entry.TimeRange) != 2 {
+			return false, fmt.Sprintf("打卡时段 %s 时间范围格式无效", key)
+		}
+		if !isValidHHMM(entry.TimeRange[0]) || !isValidHHMM(entry.TimeRange[1]) {
+			return false, fmt.Sprintf("打卡时段 %s 时间格式无效（需 HH:MM）", key)
+		}
+	}
+
+	// 补签窗口校验
+	for key, window := range map[string][]int{
+		"morning_signin":    cfg.MakeupWindow.MorningSignin,
+		"morning_signout":   cfg.MakeupWindow.MorningSignout,
+		"afternoon_signin":  cfg.MakeupWindow.AfternoonSignin,
+		"afternoon_signout": cfg.MakeupWindow.AfternoonSignout,
+	} {
+		if len(window) != 4 {
+			continue
+		}
+		if window[0] < 0 || window[0] > 48 || window[2] < 0 || window[2] > 48 {
+			return false, fmt.Sprintf("补签窗口 %s 小时无效（范围 0-48）", key)
+		}
+		if window[1] < 0 || window[1] > 59 || window[3] < 0 || window[3] > 59 {
+			return false, fmt.Sprintf("补签窗口 %s 分钟无效（范围 0-59）", key)
+		}
+	}
+
+	// 恢复策略校验
+	if cfg.AppState.RecoveryBaseBackoffSeconds > cfg.AppState.RecoveryMaxBackoffSeconds {
+		return false, "恢复策略无效：基准退避不能大于最大退避"
+	}
+
+	return true, ""
+}
+
+func isValidHHMM(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	h := int(s[0]-'0')*10 + int(s[1]-'0')
+	m := int(s[3]-'0')*10 + int(s[4]-'0')
+	return h >= 0 && h <= 23 && m >= 0 && m <= 59
+}

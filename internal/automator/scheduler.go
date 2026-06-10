@@ -89,7 +89,6 @@ func (s *CheckinScheduler) AddOnceJob(jobID string, runAt time.Time, callback fu
 		return false
 	}
 
-	// 移除旧的 cron entry 和本地缓存
 	s.removeJobLocked(jobID)
 
 	delay := time.Until(runAt)
@@ -115,6 +114,57 @@ func (s *CheckinScheduler) AddOnceJob(jobID string, runAt time.Time, callback fu
 
 	slog.Info("添加定时任务", "job", jobID, "runAt", runAt.Format("15:04:05"), "delay", delay.Round(time.Second))
 	return true
+}
+
+// AddDailyJob 添加每日定时任务（cron expression 方式）
+func (s *CheckinScheduler) AddDailyJob(jobID string, cronExpr string, callback func()) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cron == nil {
+		slog.Error("调度器未初始化")
+		return false
+	}
+
+	s.removeJobLocked(jobID)
+
+	entryID, err := s.cron.AddFunc(cronExpr, callback)
+	if err != nil {
+		slog.Error("添加每日任务失败", "job", jobID, "cron", cronExpr, "error", err)
+		return false
+	}
+
+	s.jobs[jobID] = &ScheduledJob{
+		ID:     jobID,
+		Status: "pending",
+	}
+	s.entries[jobID] = entryID
+
+	slog.Info("添加每日定时任务", "job", jobID, "cron", cronExpr)
+	return true
+}
+
+// ReconcileManagedJobs 同步调度器状态：清理不再需要的作业，返回清理统计
+func (s *CheckinScheduler) ReconcileManagedJobs(managedJobIDs []string) map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	managed := make(map[string]bool)
+	for _, id := range managedJobIDs {
+		managed[id] = true
+	}
+
+	stats := map[string]int{"removed": 0, "kept": 0}
+	for jobID := range s.jobs {
+		if !managed[jobID] {
+			s.removeJobLocked(jobID)
+			stats["removed"]++
+			slog.Info("作业已从此调度器移除", "job", jobID)
+		} else {
+			stats["kept"]++
+		}
+	}
+	return stats
 }
 
 // RemoveJob 移除任务

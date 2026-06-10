@@ -1,11 +1,42 @@
 package automator
 
 import (
+	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// ── 已打卡时间范围常量 ────────────────────────────────────────────
+
+// AlreadyCheckedInRanges 4 个时段的已打卡判定范围
+var AlreadyCheckedInRanges = map[CheckinAction]struct{ StartHour, StartMin, EndHour, EndMin int }{
+	MorningSignin:    {7, 0, 9, 0},
+	MorningSignout:   {11, 0, 13, 0},
+	AfternoonSignin:  {12, 0, 14, 0},
+	AfternoonSignout: {17, 0, 28, 0}, // 跨天
+}
+
+// ── 错误类型 ──────────────────────────────────────────────────────
+
+// AlreadyCheckedInError 已打卡错误（区分正确时段 vs 异常弹窗）
+type AlreadyCheckedInError struct {
+	Message       string
+	InCorrectSlot bool   // true=正确时段内已打卡, false=异常弹窗显示已打卡
+	CheckinTime   string // 打卡时间
+}
+
+func (e *AlreadyCheckedInError) Error() string { return e.Message }
+
+// GpsLocationError GPS 定位错误
+type GpsLocationError struct {
+	Message     string
+	FailureCode string
+}
+
+func (e *GpsLocationError) Error() string { return e.Message }
 
 // ResolveActionSlot 解析动作所属时段
 func ResolveActionSlot(action CheckinAction) (isMorning, isSignin bool, slotLabel string) {
@@ -22,7 +53,7 @@ func ResolveActionSlot(action CheckinAction) (isMorning, isSignin bool, slotLabe
 	return true, true, "未知"
 }
 
-// IsAlreadyCheckedIn 判断该时段是否已打卡（通过 UI 按钮状态判断）
+// IsAlreadyCheckedIn 判断该时段是否已打卡
 func IsAlreadyCheckedIn(action CheckinAction, device DeviceOperator) bool {
 	if device == nil {
 		return false
@@ -39,7 +70,132 @@ func IsAlreadyCheckedIn(action CheckinAction, device DeviceOperator) bool {
 
 func isClickable(s string) bool { return s == "true" }
 
-// ── 按钮查找策略 ───────────────────────────────────────────────────
+// ── 按钮查找三策略 ─────────────────────────────────────────────────
+
+// FindAndClickButton 三策略按钮查找+点击
+// 策略 A: 行锚定法 — 左侧标签 → 右侧时间按钮
+// 策略 B: 全文本扫描 — 按 Y 排序，选上午/下午对应行
+// 策略 C: 兜底 — 文本包含匹配 + 放宽条件
+// 返回: (是否成功, error)
+func FindAndClickButton(action CheckinAction, device DeviceOperator) (bool, error) {
+	xml, err := device.DumpHierarchy()
+	if err != nil {
+		return false, fmt.Errorf("dump hierarchy: %w", err)
+	}
+
+	nodes := ParseHierarchyXML(xml)
+	w, _, _ := device.WindowSize()
+	midX := int(float64(w) * 0.5)
+
+	_, isSignin, _ := ResolveActionSlot(action)
+	actionText := "签到"
+	if !isSignin {
+		actionText = "签退"
+	}
+
+	// 策略 A：行锚定法 — 找左侧标签，点击右侧可点击时间节点
+	for _, n := range nodes {
+		if n.BoundsParsed == nil || n.Text != actionText || isClickable(n.Clickable) {
+			continue
+		}
+		r := n.BoundsParsed
+		if r.CenterX() >= midX {
+			continue
+		}
+
+		rightNodes := CollectRightNodes(nodes, r, midX)
+		for _, rn := range rightNodes {
+			if !rn.Clickable || rn.Rect == nil {
+				continue
+			}
+			// 检查是否已打卡（时间不可点击=已完成）
+			allDone := true
+			for _, rn2 := range rightNodes {
+				if rn2.Clickable {
+					allDone = false
+					break
+				}
+			}
+			if allDone && len(rightNodes) > 0 {
+				return false, &AlreadyCheckedInError{
+					Message:       fmt.Sprintf("%s 该时段已打卡", actionText),
+					InCorrectSlot: true,
+					CheckinTime:   rightNodes[0].Time,
+				}
+			}
+
+			slog.Info("策略A·行锚定：点击右侧时间", "time", rn.Time)
+			if err := device.Click(rn.Rect.CenterX(), rn.Rect.CenterY()); err == nil {
+				return true, nil
+			}
+		}
+	}
+
+	// 策略 B：全文本扫描 — 按 Y 排序，上午选上半部分，下午选下半部分
+	slog.Info("策略B·全文本扫描", "text", actionText)
+	isMorning, _, _ := ResolveActionSlot(action)
+
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].BoundsParsed == nil {
+			return false
+		}
+		if nodes[j].BoundsParsed == nil {
+			return true
+		}
+		return nodes[i].BoundsParsed.Y1 < nodes[j].BoundsParsed.Y1
+	})
+
+	var candidates []UINode
+	for _, n := range nodes {
+		if n.BoundsParsed == nil || !isClickable(n.Clickable) {
+			continue
+		}
+		if strings.Contains(n.Text, actionText) {
+			candidates = append(candidates, n)
+		}
+	}
+
+	for _, c := range candidates {
+		y := c.BoundsParsed.Y1
+		_, h, _ := device.WindowSize()
+		if (isMorning && y < h/2) || (!isMorning && y >= h/2) {
+			if err := device.Click(c.BoundsParsed.CenterX(), c.BoundsParsed.CenterY()); err == nil {
+				slog.Info("策略B·全文本扫描：点击匹配", "text", c.Text, "y", y)
+				return true, nil
+			}
+		}
+	}
+
+	// 策略 C：兜底 — 文本包含匹配任何可点击元素
+	slog.Info("策略C·兜底方案", "text", actionText)
+	for _, n := range nodes {
+		if n.BoundsParsed == nil || !isClickable(n.Clickable) {
+			continue
+		}
+		if strings.Contains(n.Text, actionText) {
+			if err := device.Click(n.BoundsParsed.CenterX(), n.BoundsParsed.CenterY()); err == nil {
+				slog.Info("策略C·包含匹配：点击", "text", n.Text)
+				return true, nil
+			}
+		}
+	}
+
+	// 放宽：不要求 clickable
+	for _, n := range nodes {
+		if n.BoundsParsed == nil {
+			continue
+		}
+		if n.Text == actionText || strings.Contains(n.Text, actionText) {
+			if err := device.Click(n.BoundsParsed.CenterX(), n.BoundsParsed.CenterY()); err == nil {
+				slog.Info("策略C·放宽条件：点击", "text", n.Text)
+				time.Sleep(500 * time.Millisecond)
+				return true, nil
+			}
+		}
+	}
+
+	return false, fmt.Errorf("未找到 '%s' 按钮", actionText)
+}
 
 // CollectRightNodes 收集目标行右侧的时间节点
 func CollectRightNodes(nodes []UINode, labelNode *Rect, midX int) []struct {
@@ -58,7 +214,6 @@ func CollectRightNodes(nodes []UINode, labelNode *Rect, midX int) []struct {
 			continue
 		}
 		r := n.BoundsParsed
-		// 在标签行右侧且垂直重叠
 		if r.CenterX() > midX && r.Y1 >= labelNode.Y1-10 && r.Y2 <= labelNode.Y2+10 {
 			if IsTimeMatch(n.Text) {
 				results = append(results, struct {
@@ -76,7 +231,7 @@ func CollectRightNodes(nodes []UINode, labelNode *Rect, midX int) []struct {
 	return results
 }
 
-// VerifyTargetRowTransition 检查目标行是否从未点击变为已点击（时间文本替代按钮文本）
+// VerifyTargetRowTransition 检查目标行是否已打卡
 func VerifyTargetRowTransition(nodes []UINode, action CheckinAction, midX int) bool {
 	_, isSignin, _ := ResolveActionSlot(action)
 	actionText := "签到"
@@ -84,7 +239,6 @@ func VerifyTargetRowTransition(nodes []UINode, action CheckinAction, midX int) b
 		actionText = "签退"
 	}
 
-	// 找左侧标签
 	for _, n := range nodes {
 		if n.BoundsParsed == nil {
 			continue
@@ -92,9 +246,7 @@ func VerifyTargetRowTransition(nodes []UINode, action CheckinAction, midX int) b
 		if n.Text == actionText && !isClickable(n.Clickable) {
 			r := n.BoundsParsed
 			if r.CenterX() < midX {
-				// 检查右侧是否有时间节点
 				rightNodes := CollectRightNodes(nodes, r, midX)
-				// 如果有时间节点且都没有 clickable 属性，说明已完成打卡
 				if len(rightNodes) > 0 {
 					allNotClickable := true
 					for _, rn := range rightNodes {
@@ -104,7 +256,7 @@ func VerifyTargetRowTransition(nodes []UINode, action CheckinAction, midX int) b
 						}
 					}
 					if allNotClickable {
-						slog.Info("检测到目标行已变为完成状态（时间文本不可点击）")
+						slog.Info("检测到目标行已变为完成状态")
 						return true
 					}
 				}
@@ -140,7 +292,6 @@ func FindTimeNearCurrent(rightNodes []struct {
 			continue
 		}
 		nodeMinutes := h*60 + m
-
 		diff := nodeMinutes - nowMinutes
 		if diff < 0 {
 			diff = -diff
@@ -155,4 +306,3 @@ func FindTimeNearCurrent(rightNodes []struct {
 	}
 	return "", nil, false
 }
-
