@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -136,10 +137,12 @@ func (a *App) ConnectDevice() string {
 	a.devicePool = adb.NewDevicePool(a.adbHelper, time.Duration(cfg.Advanced.SessionTTLSeconds)*time.Second)
 	a.mumuHelper = adb.NewMuMuHelper(cfg.MuMu.AdbPath, cfg.MuMu.MuMuExePath)
 
-	// 自动查找 ADB
+	// 自动查找 ADB（用户未配置路径时自动探测 MuMu 自带 adb）
 	foundPath := a.mumuHelper.FindAdb()
-	if foundPath != cfg.MuMu.AdbPath && cfg.MuMu.AdbPath == "" {
+	if foundPath != "" && foundPath != "adb" && foundPath != cfg.MuMu.AdbPath {
 		slog.Info("自动发现 MuMu ADB", "path", foundPath)
+		a.adbHelper.SetADBPath(foundPath)
+		a.mumuHelper = adb.NewMuMuHelper(foundPath, cfg.MuMu.MuMuExePath)
 	}
 
 	ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, cfg.MuMu.Port)
@@ -170,6 +173,9 @@ func (a *App) ConnectDevice() string {
 		return "连接成功: " + msg
 	}
 
+	if msg == "" {
+		return fmt.Sprintf("连接失败: ADB 不可用 (路径: %s)。请在设置中配置正确的 ADB 路径，或确保 MuMu 模拟器已启动。", a.adbHelper.GetADBPath())
+	}
 	return "连接失败: " + msg
 }
 

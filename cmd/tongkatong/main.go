@@ -60,8 +60,10 @@ func main() {
 	mumu := adb.NewMuMuHelper(cfg.MuMu.AdbPath, cfg.MuMu.MuMuExePath)
 
 	foundAdb := mumu.FindAdb()
-	if foundAdb != cfg.MuMu.AdbPath && cfg.MuMu.AdbPath == "" {
+	if foundAdb != "" && foundAdb != "adb" && foundAdb != cfg.MuMu.AdbPath {
 		slog.Info("自动发现 MuMu ADB", "path", foundAdb)
+		adbHelper.SetADBPath(foundAdb)
+		mumu = adb.NewMuMuHelper(foundAdb, cfg.MuMu.MuMuExePath)
 	}
 
 	version := adbHelper.Version()

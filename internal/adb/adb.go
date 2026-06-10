@@ -46,11 +46,16 @@ func (a *ADBHelper) GetADBPath() string {
 	return a.adbPath
 }
 
+// SetADBPath 设置 ADB 路径
+func (a *ADBHelper) SetADBPath(path string) {
+	a.adbPath = path
+}
+
 // runCommand 执行 adb 命令，返回 (success, stdout_string)
 func (a *ADBHelper) runCommand(args []string, timeout time.Duration) (bool, string) {
 	ok, stdout, stderr := a.runCommandRaw(args, timeout)
 	if !ok && len(stderr) > 0 {
-		slog.Debug("ADB 命令失败", "args", args, "stderr", string(stderr))
+		slog.Warn("ADB 命令失败", "args", args, "stderr", string(stderr))
 	}
 	return ok, string(stdout)
 }
