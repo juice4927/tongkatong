@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>通卡通</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Microsoft YaHei', -apple-system, sans-serif; background: #F5F7FA; color: #111827; }
+    #app { height: 100vh; display: flex; flex-direction: column; }
+    .header { display: flex; align-items: center; padding: 8px 16px; background: #fff; border-bottom: 1px solid #E2E8F0; gap: 12px; }
+    .header h1 { font-size: 16px; font-weight: 700; }
+    .header .badge { font-size: 11px; padding: 2px 8px; border-radius: 9px; background: #EFF6FF; color: #3B82F6; }
+    .header .status { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: 12px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .status-dot.online { background: #22C55E; }
+    .status-dot.offline { background: #EF4444; }
+    .status-dot.running { background: #3B82F6; }
+    .nav { display: flex; background: #fff; border-bottom: 1px solid #E2E8F0; padding: 0 16px; gap: 0; }
+    .nav button { padding: 10px 16px; border: none; background: none; cursor: pointer; font-size: 13px; color: #6B7280; border-bottom: 2px solid transparent; }
+    .nav button.active { color: #3B82F6; border-bottom-color: #3B82F6; font-weight: 600; }
+    .nav button:hover { color: #111827; }
+    .content { flex: 1; overflow-y: auto; padding: 12px; }
+    .card { background: #fff; border: 1px solid #E2E8F0; border-radius: 12px; padding: 12px; margin-bottom: 8px; }
+    .card-title { font-size: 14px; font-weight: 700; margin-bottom: 8px; color: #111827; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metric-card { background: #fff; border: 1px solid #E9EEF5; border-radius: 12px; padding: 10px; }
+    .metric-title { font-size: 10px; font-weight: 500; color: #6B7280; }
+    .metric-value { font-size: 17px; font-weight: 700; color: #111827; margin-top: 2px; }
+    .metric-meta { font-size: 10px; color: #6B7280; margin-top: 1px; }
+    .btn { padding: 6px 14px; border-radius: 8px; border: 1px solid #E2E8F0; background: #fff; cursor: pointer; font-size: 12px; }
+    .btn-primary { background: #3B82F6; color: #fff; border-color: #3B82F6; }
+    .btn-primary:hover { background: #2563EB; }
+    .btn-success { background: #22C55E; color: #fff; border-color: #22C55E; }
+    .btn-danger { background: #EF4444; color: #fff; border-color: #EF4444; }
+    .btn-sm { padding: 4px 10px; font-size: 11px; }
+    .form-group { margin-bottom: 8px; }
+    .form-label { font-size: 12px; color: #4B5563; display: block; margin-bottom: 3px; }
+    .form-input { width: 100%; padding: 6px 8px; border: 1px solid #D1D5DB; border-radius: 6px; font-size: 12px; }
+    .form-input:focus { outline: none; border-color: #3B82F6; box-shadow: 0 0 0 2px rgba(59,130,246,0.1); }
+    .log-viewer { background: #1E293B; color: #E2E8F0; border-radius: 8px; padding: 8px; font-family: 'Consolas', monospace; font-size: 11px; height: 300px; overflow-y: auto; white-space: pre-wrap; }
+    .record-item { padding: 6px 0; border-bottom: 1px solid #F3F4F6; display: flex; justify-content: space-between; font-size: 12px; }
+    .record-item:last-child { border-bottom: none; }
+    .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .tag-success { background: #DCFCE7; color: #16A34A; }
+    .tag-fail { background: #FEE2E2; color: #DC2626; }
+    .inline-flex { display: flex; gap: 6px; align-items: center; }
+    .mt-2 { margin-top: 8px; }
+    .mb-2 { margin-bottom: 8px; }
+    .checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+    select.form-input { appearance: auto; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="header">
+      <h1>{{ appName }}</h1>
+      <span class="badge">v{{ version }}</span>
+      <div class="status">
+        <span><span class="status-dot" :class="status.is_connected ? 'online' : 'offline'"></span> {{ status.is_connected ? '已连接' : '未连接' }}</span>
+        <span><span class="status-dot" :class="status.is_running ? 'running' : 'offline'"></span> {{ status.is_running ? '运行中' : '已停止' }}</span>
+      </div>
+    </div>
+
+    <div class="nav">
+      <button v-for="tab in tabs" :key="tab.key" :class="{ active: activeTab === tab.key }" @click="activeTab = tab.key">{{ tab.label }}</button>
+    </div>
+
+    <div class="content">
+      <!-- 仪表盘 -->
+      <div v-if="activeTab === 'dashboard'">
+        <div class="card" style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-success btn-sm" @click="connectDevice" :disabled="status.is_connected">{{ status.is_connected ? '已连接' : '连接设备' }}</button>
+          <button class="btn btn-danger btn-sm" @click="disconnectDevice" :disabled="!status.is_connected">断开</button>
+          <button class="btn btn-primary btn-sm" @click="startScheduler" :disabled="!status.is_connected || status.is_running">{{ status.is_running ? '运行中' : '启动调度' }}</button>
+          <button class="btn btn-danger btn-sm" @click="stopScheduler" :disabled="!status.is_running">停止</button>
+          <span style="font-size:11px; color:#6B7280;">今天: {{ todayStr }}</span>
+        </div>
+
+        <div class="grid-2">
+          <div class="metric-card">
+            <div class="metric-title">设备状态</div>
+            <div class="metric-value">{{ status.devices && status.devices.length > 0 ? status.devices[0].serial : '无设备' }}</div>
+            <div class="metric-meta">{{ status.is_connected ? '已连接' : '未连接' }}</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-title">今日打卡</div>
+            <div class="metric-value">{{ dailyResults.length }} 次</div>
+            <div class="metric-meta">{{ holidayInfo.is_workday ? '工作日' : '休息日' }}</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">今日打卡记录</div>
+          <div v-if="dailyResults.length === 0" style="font-size:12px; color:#9CA3AF;">暂无打卡记录</div>
+          <div v-for="r in dailyResults" :key="r.timestamp" class="record-item">
+            <span>{{ r.action_name }}</span>
+            <span class="inline-flex">
+              <span class="tag" :class="r.success ? 'tag-success' : 'tag-fail'">{{ r.success ? '成功' : '失败' }}</span>
+              <span style="font-size:11px; color:#6B7280;">{{ r.timestamp }}</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">手动打卡</div>
+          <div style="display:flex; gap:6px; flex-wrap:wrap;">
+            <button v-for="ct in checkinTimes" :key="ct.key" class="btn btn-sm" @click="manualCheckin(ct.key)" :disabled="!status.is_connected" :title="ct.time_range.join(' ~ ')">
+              {{ ct.label }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 时间配置 -->
+      <div v-if="activeTab === 'timeconfig'">
+        <div class="card" v-for="(ct, key) in checkinTimes" :key="key">
+          <div class="card-title">{{ ct.label }}</div>
+          <div class="checkbox-label">
+            <input type="checkbox" v-model="ct.enabled" @change="updateCheckinTime(key)">
+            启用
+          </div>
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <div>
+              <label class="form-label">开始时间</label>
+              <input type="time" class="form-input" v-model="ct.time_range[0]" @change="updateCheckinTime(key)" style="width:120px;">
+            </div>
+            <div>
+              <label class="form-label">结束时间</label>
+              <input type="time" class="form-input" v-model="ct.time_range[1]" @change="updateCheckinTime(key)" style="width:120px;">
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">随机延迟</div>
+          <div style="display:flex; gap:8px;">
+            <div>
+              <label class="form-label">最小(秒)</label>
+              <input type="number" class="form-input" v-model.number="randomDelay.min" style="width:80px;">
+            </div>
+            <div>
+              <label class="form-label">最大(秒)</label>
+              <input type="number" class="form-input" v-model.number="randomDelay.max" style="width:80px;">
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-primary mt-2" @click="saveAllConfig">保存配置</button>
+      </div>
+
+      <!-- 设置 -->
+      <div v-if="activeTab === 'settings'">
+        <div class="card">
+          <div class="card-title">模拟器设置</div>
+          <div class="form-group"><label class="form-label">主机地址</label><input class="form-input" v-model="mumuCfg.host"></div>
+          <div class="form-group"><label class="form-label">端口</label><input class="form-input" v-model.number="mumuCfg.port"></div>
+          <div class="form-group"><label class="form-label">ADB 路径</label><input class="form-input" v-model="mumuCfg.adb_path"></div>
+          <div class="form-group"><label class="form-label">MuMu 路径</label><input class="form-input" v-model="mumuCfg.mumu_exe_path"></div>
+          <div class="form-group"><label class="form-label">GPS 纬度</label><input class="form-input" v-model.number="mumuCfg.gps_latitude"></div>
+          <div class="form-group"><label class="form-label">GPS 经度</label><input class="form-input" v-model.number="mumuCfg.gps_longitude"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">应用设置</div>
+          <div class="form-group"><label class="form-label">应用包名</label><input class="form-input" v-model="appCfg.package_name"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">通知设置</div>
+          <div class="checkbox-label"><input type="checkbox" v-model="notifyCfg.enabled"> 启用通知</div>
+          <div class="form-group"><label class="form-label">Server酱 SendKey</label><input class="form-input" v-model="notifyCfg.webhook"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">节假日设置</div>
+          <div class="checkbox-label"><input type="checkbox" v-model="holidayCfg.skip_weekend"> 跳过周末</div>
+          <div class="checkbox-label"><input type="checkbox" v-model="holidayCfg.skip_holiday"> 跳过法定假日</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="btn btn-primary" @click="saveAllConfig">保存设置</button>
+          <button class="btn" @click="exportConfig">导出配置</button>
+          <button class="btn" @click="importConfig">导入配置</button>
+          <button class="btn" @click="listPackages">列出已安装包</button>
+        </div>
+        <div v-if="packages.length > 0" class="card mt-2" style="max-height:200px; overflow-y:auto;">
+          <div v-for="pkg in packages" :key="pkg" class="record-item">{{ pkg }}</div>
+        </div>
+      </div>
+
+      <!-- 日志 -->
+      <div v-if="activeTab === 'logs'">
+        <div style="display:flex; gap:8px; margin-bottom:8px;">
+          <button class="btn btn-sm" @click="refreshLog">刷新日志</button>
+          <button class="btn btn-sm" @click="clearLog">清屏</button>
+        </div>
+        <div class="log-viewer" ref="logViewer">{{ logContent }}</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3.4/dist/vue.global.prod.js"></script>
+  <script>
+    const { createApp, ref, reactive, onMounted, nextTick, watch } = Vue;
+
+    createApp({
+      setup() {
+        const appName = ref('通卡通');
+        const version = ref('3.0.0');
+        const activeTab = ref('dashboard');
+        const tabs = [
+          { key: 'dashboard', label: '仪表盘' },
+          { key: 'timeconfig', label: '时间配置' },
+          { key: 'settings', label: '设置' },
+          { key: 'logs', label: '日志' },
+        ];
+
+        const status = reactive({ is_connected: false, is_running: false, devices: [] });
+        const checkinTimes = reactive({});
+        const dailyResults = ref([]);
+        const logContent = ref('');
+        const packages = ref([]);
+        const todayStr = ref(new Date().toLocaleDateString('zh-CN'));
+        const holidayInfo = reactive({ is_workday: true });
+
+        // Config sub-sections
+        const mumuCfg = reactive({ host: '127.0.0.1', port: 5555, adb_path: '', mumu_exe_path: '', gps_latitude: 0, gps_longitude: 0 });
+        const appCfg = reactive({ package_name: 'com.tencent.weworklocal', activity: '' });
+        const notifyCfg = reactive({ enabled: false, webhook: '', verify_tls: true });
+        const holidayCfg = reactive({ skip_weekend: true, skip_holiday: true, extra_workdays: [], extra_holidays: [] });
+        const randomDelay = reactive({ min: 1, max: 5 });
+
+        const logViewer = ref(null);
+
+        // Load initial data
+        onMounted(() => {
+          loadConfig();
+          refreshStatus();
+          setInterval(refreshStatus, 3000);
+          // Register log callback
+          if (window.runtime && window.runtime.Callback) {
+            window.runtime.Callback('RegisterLogCallback', (msg, level) => {
+              logContent.value += '[' + level + '] ' + msg + '\n';
+              scrollLog();
+            });
+          }
+        });
+
+        function scrollLog() {
+          nextTick(() => {
+            if (logViewer.value) {
+              logViewer.value.scrollTop = logViewer.value.scrollHeight;
+            }
+          });
+        }
+
+        async function callBackend(method, ...args) {
+          try {
+            if (window.runtime && window.runtime.Call) {
+              return await window.runtime.Call(method, ...args);
+            }
+            console.log('Call:', method, args);
+            return null;
+          } catch (e) {
+            console.error('Backend call failed:', method, e);
+            return null;
+          }
+        }
+
+        async function loadConfig() {
+          const cfgJson = await callBackend('GetConfigJSON');
+          if (!cfgJson) {
+            // Fallback: use hardcoded defaults
+            Object.assign(mumuCfg, { host: '127.0.0.1', port: 5555 });
+            return;
+          }
+          try {
+            const cfg = JSON.parse(cfgJson);
+            Object.assign(mumuCfg, cfg.mumu || {});
+            Object.assign(appCfg, cfg.app || {});
+            Object.assign(notifyCfg, cfg.notification || {});
+            Object.assign(holidayCfg, cfg.holiday || {});
+            if (cfg.random_delay) {
+              randomDelay.min = cfg.random_delay.min_seconds || 1;
+              randomDelay.max = cfg.random_delay.max_seconds || 5;
+            }
+
+            // Load checkin times
+            const times = cfg.checkin || {};
+            Object.keys(checkinTimes).forEach(k => delete checkinTimes[k]);
+            Object.entries(times).forEach(([k, v]) => {
+              checkinTimes[k] = { enabled: v.enabled, time_range: [...(v.time_range || ['00:00', '00:00'])], label: v.label || k };
+            });
+          } catch(e) {
+            console.error('Config parse error:', e);
+          }
+        }
+
+        async function refreshStatus() {
+          const s = await callBackend('GetStatus');
+          if (s) {
+            status.is_connected = s.is_connected;
+            status.is_running = s.is_running;
+            status.devices = s.devices || [];
+          }
+
+          const results = await callBackend('GetDailyResults');
+          if (results) dailyResults.value = results;
+
+          const hi = await callBackend('CheckHoliday', '');
+          if (hi) {
+            holidayInfo.is_workday = hi.is_workday;
+          }
+        }
+
+        async function connectDevice() {
+          const msg = await callBackend('ConnectDevice');
+          logContent.value += '[INFO] ' + msg + '\n';
+          await refreshStatus();
+        }
+
+        async function disconnectDevice() {
+          const msg = await callBackend('DisconnectDevice');
+          logContent.value += '[INFO] ' + msg + '\n';
+          await refreshStatus();
+        }
+
+        async function startScheduler() {
+          const msg = await callBackend('StartScheduler');
+          logContent.value += '[INFO] ' + msg + '\n';
+          await refreshStatus();
+        }
+
+        async function stopScheduler() {
+          const msg = await callBackend('StopScheduler');
+          logContent.value += '[INFO] ' + msg + '\n';
+          await refreshStatus();
+        }
+
+        async function manualCheckin(action) {
+          const msg = await callBackend('ManualCheckin', action);
+          logContent.value += '[INFO] 手动打卡: ' + msg + '\n';
+          await refreshStatus();
+        }
+
+        async function updateCheckinTime(key) {
+          // Changes tracked via the reactive object
+        }
+
+        async function saveAllConfig() {
+          const cfg = {
+            mumu: mumuCfg,
+            app: appCfg,
+            notification: notifyCfg,
+            holiday: holidayCfg,
+            random_delay: { min_seconds: randomDelay.min, max_seconds: randomDelay.max },
+            checkin: Object.fromEntries(Object.entries(checkinTimes).map(([k, v]) => [k, { enabled: v.enabled, time_range: v.time_range, label: v.label }])),
+          };
+          const data = JSON.stringify(cfg, null, 2);
+          const result = await callBackend('SaveConfig', data);
+          logContent.value += '[INFO] ' + result + '\n';
+        }
+
+        async function exportConfig() {
+          const data = await callBackend('ExportConfig');
+          if (data) {
+            const blob = new Blob([data], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'user_config.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            logContent.value += '[INFO] 配置已导出\n';
+          }
+        }
+
+        async function importConfig() {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = '.json';
+          input.onchange = async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const text = await file.text();
+            const result = await callBackend('ImportConfig', text);
+            logContent.value += '[INFO] ' + result + '\n';
+            await loadConfig();
+          };
+          input.click();
+        }
+
+        async function listPackages() {
+          const pkgs = await callBackend('GetAvailablePackages');
+          packages.value = pkgs || [];
+          logContent.value += '[INFO] 已获取 ' + (pkgs ? pkgs.length : 0) + ' 个包\n';
+        }
+
+        async function refreshLog() {
+          const content = await callBackend('GetLogContent');
+          if (content) logContent.value = content;
+        }
+
+        function clearLog() {
+          logContent.value = '';
+        }
+
+        return {
+          appName, version, activeTab, tabs,
+          status, checkinTimes, dailyResults, logContent, packages, todayStr, holidayInfo,
+          mumuCfg, appCfg, notifyCfg, holidayCfg, randomDelay,
+          logViewer,
+          connectDevice, disconnectDevice, startScheduler, stopScheduler,
+          manualCheckin, updateCheckinTime, saveAllConfig,
+          exportConfig, importConfig, listPackages, refreshLog, clearLog, refreshStatus,
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

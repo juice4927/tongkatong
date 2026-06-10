@@ -1,0 +1,16 @@
+# Go
+*.exe
+*.exe~
+*.test
+*.out
+*.test.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temp
+*~
+*.tmp

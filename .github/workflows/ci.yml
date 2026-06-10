@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, develop ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  lint:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.26'
+    - name: Lint
+      run: |
+        go vet ./...
+        go fmt ./...
+
+  test:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.26'
+    - name: Test
+      run: go test ./... -v -count=1
+
+  build:
+    runs-on: windows-latest
+    needs: [lint, test]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.26'
+    - name: Build tongkatong
+      run: go build -ldflags "-s -w" -o tongkatong.exe ./cmd/tongkatong/
+    - name: Build updater
+      run: go build -ldflags "-s -w" -o tongkatong-updater.exe ./cmd/updater/
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: tongkatong-binaries
+        path: |
+          tongkatong.exe
+          tongkatong-updater.exe
