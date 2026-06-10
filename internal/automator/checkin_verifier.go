@@ -2,6 +2,7 @@ package automator
 
 import (
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/juice4927/tongkatong/internal/models"
@@ -40,7 +41,7 @@ func (v *CheckinVerifier) HandleConfirmDialog(timeout int) error {
 		// 检测失败弹窗
 		failKeywords := []string{"超出距离", "不在打卡范围", "定位失败", "网络异常", "打卡失败"}
 		for _, kw := range failKeywords {
-			if containsSubstring(xml, kw) {
+			if strings.Contains(xml, kw) {
 				slog.Warn("检测到打卡失败弹窗", "keyword", kw)
 				// 关闭弹窗
 				v.dialogHandler.ClickButtonByText([]string{"确定", "知道了", "关闭"})
@@ -52,7 +53,7 @@ func (v *CheckinVerifier) HandleConfirmDialog(timeout int) error {
 		// 检测成功弹窗 — 只记录成功状态，不关闭弹窗（留给 DefaultVerify 再次确认）
 		successKeywords := []string{"打卡成功", "签到成功", "签退成功"}
 		for _, kw := range successKeywords {
-			if containsSubstring(xml, kw) {
+			if strings.Contains(xml, kw) {
 				slog.Info("检测到成功弹窗", "keyword", kw)
 				// 先关闭弹窗让后续流程继续
 				v.dialogHandler.ClickButtonByText([]string{"确定", "知道了", "关闭"})
@@ -63,11 +64,11 @@ func (v *CheckinVerifier) HandleConfirmDialog(timeout int) error {
 		}
 
 		// 检测需要确认的弹窗
-		if containsSubstring(xml, "重新签") || containsSubstring(xml, `text="提示"`) {
+		if strings.Contains(xml, "重新签") || strings.Contains(xml, `text="提示"`) {
 			cancelKeywords := []string{"退出登录", "退出", "注销", "删除", "移除"}
 			shouldCancel := false
 			for _, kw := range cancelKeywords {
-				if containsSubstring(xml, kw) {
+				if strings.Contains(xml, kw) {
 					shouldCancel = true
 					break
 				}
@@ -117,7 +118,7 @@ func (v *CheckinVerifier) DefaultVerify(action CheckinAction) bool {
 		"请先定位", "无法获取", "签到失败", "签退失败",
 	}
 	for _, kw := range failKeywords {
-		if containsSubstring(xml, kw) {
+		if strings.Contains(xml, kw) {
 			slog.Warn("检测到失败提示", "keyword", kw)
 			v.dialogHandler.ClickButtonByText([]string{"确定", "知道了", "关闭", "取消"})
 			return false
@@ -127,7 +128,7 @@ func (v *CheckinVerifier) DefaultVerify(action CheckinAction) bool {
 	// 2. 检测成功弹窗
 	successTexts := []string{"打卡成功", "签到成功", "签退成功"}
 	for _, text := range successTexts {
-		if containsSubstring(xml, text) {
+		if strings.Contains(xml, text) {
 			return true
 		}
 	}
@@ -176,21 +177,6 @@ func (v *CheckinVerifier) DefaultVerify(action CheckinAction) bool {
 
 	slog.Warn("未找到目标行，判定打卡失败")
 	return false
-}
-
-// ── 助手函数 ───────────────────────────────────────────────────────
-
-func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr) != -1
-}
-
-func searchString(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
 
 // CheckinError 打卡错误

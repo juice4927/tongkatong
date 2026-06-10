@@ -109,5 +109,17 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0644)
+	// 重试写入（最多 5 次，间隔 500ms），应对 Windows 文件锁定
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		if i > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+		if err := os.WriteFile(dst, data, 0644); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+	}
+	return fmt.Errorf("文件写入失败（已重试5次）: %w", lastErr)
 }

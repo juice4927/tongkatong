@@ -5,43 +5,14 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/juice4927/tongkatong/internal/adb"
 	"github.com/juice4927/tongkatong/internal/models"
+	"github.com/juice4927/tongkatong/internal/utils"
 )
-
-// ── 自定义错误 ──────────────────────────────────────────────────────
-
-type DeviceConnectionError struct {
-	Message     string
-	FailureCode string
-}
-
-func (e *DeviceConnectionError) Error() string { return e.Message }
-
-type AppNotFoundError struct{ Message string }
-
-func (e *AppNotFoundError) Error() string { return e.Message }
-
-type LoginTimeoutError struct{ Message string }
-
-func (e *LoginTimeoutError) Error() string { return e.Message }
-
-type GpsLocationError struct{ Message string }
-
-func (e *GpsLocationError) Error() string { return e.Message }
-
-type AlreadyCheckedInError struct {
-	Message         string
-	InCorrectSlot   bool
-	CheckinTime     string
-}
-
-func (e *AlreadyCheckedInError) Error() string { return e.Message }
 
 // ── UIAutomator2Impl ──────────────────────────────────────────────
 
@@ -370,8 +341,19 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 	}
 	time.Sleep(2 * time.Second)
 
-	// 6. 处理可能出现的确认弹窗
-	_ = u.verifier.HandleConfirmDialog(30)
+	// 6. 处理可能出现的确认弹窗（如果弹窗报失败则直接结束）
+	if err := u.verifier.HandleConfirmDialog(30); err != nil {
+		if chkErr, ok := err.(*CheckinError); ok {
+			return &models.CheckinResult{
+				Success:        false,
+				Action:         string(action),
+				Message:        chkErr.Message,
+				Timestamp:      timestamp,
+				FailureCode:    chkErr.FailureCode,
+				RecoveryAction: u.navigator.LastRecoveryAction(),
+			}, nil
+		}
+	}
 
 	// 7. 验证打卡结果
 	slog.Info("验证打卡结果")
@@ -382,15 +364,10 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 	if !success {
 		message = "打卡失败"
 		failureCode = string(models.CheckinFailed)
-		// 截屏保存诊断
-		if data, err := u.Screenshot(); err == nil {
-			diagPath := filepath.Join("logs", "diagnosis")
-			_ = os.MkdirAll(diagPath, 0755)
-			ts := time.Now().Format("20060102_150405")
-			savePath := filepath.Join(diagPath, fmt.Sprintf("fail_%s_%s.png", action, ts))
-			_ = os.WriteFile(savePath, data, 0644)
-			slog.Info("失败诊断截图已保存", "path", savePath)
-		}
+		// 保存诊断信息（截图 + XML dump）
+		screenshotFn := func() ([]byte, error) { return u.Screenshot() }
+		xmlFn := func() (string, error) { return u.DumpHierarchy() }
+		utils.SaveFailureDiagnosis("", string(action), screenshotFn, xmlFn)
 	}
 
 	// 8. 返回主页

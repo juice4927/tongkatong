@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"time"
@@ -17,7 +19,7 @@ var DefaultProbeTargets = []struct {
 	{"8.8.8.8", 53},
 }
 
-// CheckNetworkConnectivity 检查网络连通性
+// CheckNetworkConnectivity 并行检查网络连通性（任一目标可达即返回 true，总超时 = timeout）
 func CheckNetworkConnectivity(probes []struct{ Host string; Port int }, timeout time.Duration) bool {
 	targets := probes
 	if len(targets) == 0 {
@@ -27,29 +29,32 @@ func CheckNetworkConnectivity(probes []struct{ Host string; Port int }, timeout 
 		timeout = 5 * time.Second
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	resultCh := make(chan bool, len(targets))
 	for _, target := range targets {
-		addr := net.JoinHostPort(target.Host, itoa(target.Port))
-		conn, err := net.DialTimeout("tcp", addr, timeout)
-		if err == nil {
-			conn.Close()
-			return true
+		go func(host string, port int) {
+			addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+			conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+			if err == nil {
+				conn.Close()
+				resultCh <- true
+			} else {
+				resultCh <- false
+			}
+		}(target.Host, target.Port)
+	}
+
+	for i := 0; i < len(targets); i++ {
+		select {
+		case ok := <-resultCh:
+			if ok {
+				return true
+			}
+		case <-ctx.Done():
+			return false
 		}
-		slog.Debug("网络探测失败", "target", addr, "error", err)
 	}
-
 	return false
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }

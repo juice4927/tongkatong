@@ -115,6 +115,7 @@ func main() {
 		}
 
 		orc.Start()
+		defer orc.Stop()
 		slog.Info("Headless 模式已启动，等待定时任务...")
 		fmt.Println("调度器已启动，等待定时打卡...")
 	}

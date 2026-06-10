@@ -2,7 +2,6 @@
 package utils
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -96,15 +95,18 @@ func SetupLogging(logDir string, level string, consoleOutput bool) error {
 		writer = io.Discard
 	}
 
-	handler := slog.NewTextHandler(writer, &slog.HandlerOptions{
-		Level: logLevel,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.TimeKey {
-				return slog.String("time", a.Value.Time().Format("2006-01-02 15:04:05"))
-			}
-			return a
-		},
-	})
+	handler := &callbackHandler{
+		handler: slog.NewTextHandler(writer, &slog.HandlerOptions{
+			Level: logLevel,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				if a.Key == slog.TimeKey {
+					return slog.String("time", a.Value.Time().Format("2006-01-02 15:04:05"))
+				}
+				return a
+			},
+		}),
+		manager: lm,
+	}
 
 	lm.logger = slog.New(handler)
 	slog.SetDefault(lm.logger)
@@ -113,30 +115,48 @@ func SetupLogging(logDir string, level string, consoleOutput bool) error {
 	return nil
 }
 
+// callbackHandler 包装 slog.Handler，在每次日志写入时同时通知 GUI 回调
+type callbackHandler struct {
+	handler slog.Handler
+	manager *LogManager
+}
+
+func (h *callbackHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return h.handler.Enabled(ctx, level)
+}
+
+func (h *callbackHandler) Handle(ctx context.Context, r slog.Record) error {
+	// 通知所有 GUI 回调
+	h.manager.mu.RLock()
+	msg := r.Message
+	levelStr := r.Level.String()
+	for _, cb := range h.manager.callbacks {
+		cb(msg, levelStr)
+	}
+	h.manager.mu.RUnlock()
+
+	return h.handler.Handle(ctx, r)
+}
+
+func (h *callbackHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &callbackHandler{
+		handler: h.handler.WithAttrs(attrs),
+		manager: h.manager,
+	}
+}
+
+func (h *callbackHandler) WithGroup(name string) slog.Handler {
+	return &callbackHandler{
+		handler: h.handler.WithGroup(name),
+		manager: h.manager,
+	}
+}
+
 // AddCallback 注册日志回调
 func (lm *LogManager) AddCallback(cb LogCallback) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 	lm.callbacks = append(lm.callbacks, cb)
-}
-
-// RemoveCallback 移除日志回调
-func (lm *LogManager) RemoveCallback(cb LogCallback) {
-	lm.mu.Lock()
-	defer lm.mu.Unlock()
-	for i, c := range lm.callbacks {
-		if fmt.Sprintf("%p", c) == fmt.Sprintf("%p", cb) {
-			lm.callbacks = append(lm.callbacks[:i], lm.callbacks[i+1:]...)
-			return
-		}
-	}
-}
-
-// notifyCallbacks 通知所有回调（内部方法，调用方需持有锁）
-func (lm *LogManager) notifyCallbacks(msg string, level string) {
-	for _, cb := range lm.callbacks {
-		cb(msg, level)
-	}
 }
 
 // Close 关闭日志文件
@@ -147,13 +167,4 @@ func (lm *LogManager) Close() {
 		_ = lm.logFile.Close()
 		lm.logFile = nil
 	}
-}
-
-// ── 上下文键 ────────────────────────────────────────────────────────
-
-type logCtxKey struct{}
-
-// WithLogAttrs 将属性附加到上下文，供日志使用
-func WithLogAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
-	return context.WithValue(ctx, logCtxKey{}, attrs)
 }

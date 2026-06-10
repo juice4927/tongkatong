@@ -1,10 +1,13 @@
 package adb
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 )
+
+// ... (no change)
 
 // DevicePool 设备连接池（支持多模拟器并发管理）
 type DevicePool struct {
@@ -99,21 +102,7 @@ func (p *DevicePool) ADB() *ADBHelper {
 }
 
 func formatAddress(host string, port int) string {
-	return host + ":" + itoa(port)
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+	return fmt.Sprintf("%s:%d", host, port)
 }
 
 // DeviceError 设备错误

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -336,10 +337,10 @@ func (a *App) GetAvailablePackages() []string {
 	if !ok {
 		return nil
 	}
-	lines := splitLines(out)
+	lines := strings.Split(out, "\n")
 	packages := make([]string, 0, len(lines))
 	for _, line := range lines {
-		line = trimSpace(line)
+		line = strings.TrimSpace(line)
 		if len(line) > 8 && line[:8] == "package:" {
 			packages = append(packages, line[8:])
 		}
@@ -358,37 +359,4 @@ func (a *App) GetLogContent() string {
 		return "日志文件不可用"
 	}
 	return string(data)
-}
-
-// ── 辅助 ──────────────────────────────────────────────────────────
-
-func splitLines(s string) []string {
-	if len(s) == 0 {
-		return nil
-	}
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			if i > start {
-				lines = append(lines, s[start:i])
-			}
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
-}
-
-func trimSpace(s string) string {
-	start, end := 0, len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\r') {
-		end--
-	}
-	return s[start:end]
 }

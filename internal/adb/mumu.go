@@ -99,42 +99,6 @@ func (m *MuMuHelper) SetGPS(latitude, longitude float64) (bool, string) {
 	return true, ""
 }
 
-// StartMuMu 启动 MuMu 模拟器（通过 MuMuManager）
-func (m *MuMuHelper) StartMuMu() (bool, string) {
-	manager := m.FindMuMuManager()
-	if manager == "" {
-		return false, "未找到 MuMuManager.exe"
-	}
-
-	cmd := exec.Command(manager, "launch", "0") // 启动第 0 个模拟器
-	hideWindow(cmd)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return false, fmt.Sprintf("启动 MuMu 失败: %v", err)
-	}
-	slog.Info("MuMu 模拟器已启动")
-	return true, string(output)
-}
-
-// StopMuMu 停止 MuMu 模拟器
-func (m *MuMuHelper) StopMuMu() (bool, string) {
-	manager := m.FindMuMuManager()
-	if manager == "" {
-		return false, "未找到 MuMuManager.exe"
-	}
-
-	cmd := exec.Command(manager, "control", "-v", "0", "stop")
-	hideWindow(cmd)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return false, fmt.Sprintf("停止 MuMu 失败: %v", err)
-	}
-	slog.Info("MuMu 模拟器已停止")
-	return true, string(output)
-}
-
 func fileExists(path string) bool {
 	if path == "" {
 		return false
