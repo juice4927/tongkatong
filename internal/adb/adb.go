@@ -3,6 +3,7 @@ package adb
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -64,7 +65,10 @@ func (a *ADBHelper) runCommand(args []string, timeout time.Duration) (bool, stri
 
 // runCommandRaw 执行 adb 命令，返回 (success, stdout_bytes, stderr_bytes)
 func (a *ADBHelper) runCommandRaw(args []string, timeout time.Duration) (bool, []byte, []byte) {
-	cmd := exec.Command(a.adbPath, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, a.adbPath, args...)
 	hideWindow(cmd)
 
 	var stdout, stderr bytes.Buffer
@@ -75,21 +79,14 @@ func (a *ADBHelper) runCommandRaw(args []string, timeout time.Duration) (bool, [
 		return false, nil, []byte(fmt.Sprintf("启动命令失败: %v", err))
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			return false, stdout.Bytes(), stderr.Bytes()
+	err := cmd.Wait()
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, nil, []byte("命令超时")
 		}
-		return true, stdout.Bytes(), stderr.Bytes()
-	case <-time.After(timeout):
-		_ = cmd.Process.Kill()
-		return false, nil, []byte("命令超时")
+		return false, stdout.Bytes(), stderr.Bytes()
 	}
+	return true, stdout.Bytes(), stderr.Bytes()
 }
 
 // Version 获取 ADB 版本

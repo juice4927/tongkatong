@@ -48,10 +48,10 @@ type UpdateState struct {
 }
 
 const (
-	UpdateTempDir   = "tongkatong_updates"
+	UpdateTempDir  = "tongkatong_updates"
 	UpdateStateFile = "update_state.json"
-	MaxRetries      = 4
-	ChunkSize       = 512 * 1024
+	MaxRetries     = 4
+	ChunkSize      = 512 * 1024
 )
 
 // ── 版本比较 ──────────────────────────────────────────────────────
@@ -296,9 +296,11 @@ func ConsumeUpdateState(baseDir string) *UpdateState {
 
 // LaunchUpdater 启动更新器（独立进程）
 func LaunchUpdater(updaterExe, downloadedFile, currentExe, targetVersion, currentVersion string) error {
+	// 检查更新器二进制是否存在
+	if _, err := os.Stat(updaterExe); err != nil {
+		return fmt.Errorf("更新器不存在: %s", updaterExe)
+	}
 	stateDir := filepath.Dir(currentExe)
-
-	// 写入状态
 	_ = WriteUpdateState(stateDir, "pending", targetVersion, currentVersion, "Update package downloaded.")
 
 	// 构建参数

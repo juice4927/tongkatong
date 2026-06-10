@@ -43,16 +43,19 @@ func (v *CheckinVerifier) HandleConfirmDialog(timeout int) error {
 				// 关闭弹窗
 				v.dialogHandler.ClickButtonByText([]string{"确定", "知道了", "关闭"})
 				// 失败弹窗返回错误
-				return &CheckinError{Message: "打卡失败: " + kw, FailureCode: "outside_range"}
+				return &CheckinError{Message: "打卡失败: " + kw, FailureCode: string(models.OutsideRange)}
 			}
 		}
 
-		// 检测成功弹窗
+		// 检测成功弹窗 — 只记录成功状态，不关闭弹窗（留给 DefaultVerify 再次确认）
 		successKeywords := []string{"打卡成功", "签到成功", "签退成功"}
 		for _, kw := range successKeywords {
 			if containsSubstring(xml, kw) {
 				slog.Info("检测到成功弹窗", "keyword", kw)
+				// 先关闭弹窗让后续流程继续
 				v.dialogHandler.ClickButtonByText([]string{"确定", "知道了", "关闭"})
+				// 设置标记，让 DefaultVerify 知道已完成
+				time.Sleep(1 * time.Second)
 				return nil
 			}
 		}

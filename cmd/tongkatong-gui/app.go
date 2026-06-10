@@ -70,11 +70,6 @@ func (a *App) shutdown(ctx context.Context) {
 	_ = ctx
 }
 
-// ── 日志桥接 ───────────────────────────────────────────────────────
-
-// RegisterLogCallback 注册前端日志回调（通过 Wails EventsOn 机制）
-// 前端应调用 window.runtime.EventsOn("log", (data) => {...})
-
 // ── 获取信息 ──────────────────────────────────────────────────────
 
 // GetVersionInfo 返回版本信息

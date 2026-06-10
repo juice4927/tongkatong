@@ -88,7 +88,7 @@ func (h *DialogHandler) ClickButtonByText(texts []string) bool {
 //
 //	在 Android 弹窗中，"确定"和"取消"通常水平对称于屏幕中线。
 //	找到已知按钮的 bounds，推算另一按钮的位置并点击。
-func (h *DialogHandler) clickByMirror(knowText string, screenW int, isCancel bool) bool {
+func (h *DialogHandler) clickByMirror(knowText string, screenW int, _ bool) bool {
 	// 通过 XML 解析查找已知按钮的位置
 	xml, err := h.device.DumpHierarchy()
 	if err != nil {

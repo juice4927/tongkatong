@@ -268,7 +268,11 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 
 	// 设置 GPS
 	cfg := co.configManager.Config()
-	co.setupGPS(cfg)
+	if cfg.MuMu.GpsLatitude != 0 || cfg.MuMu.GpsLongitude != 0 {
+		if err := co.automator.SetGPS(cfg.MuMu.GpsLatitude, cfg.MuMu.GpsLongitude); err != nil {
+			slog.Warn("GPS 设置失败，继续尝试打卡", "error", err)
+		}
+	}
 
 	// 执行打卡
 	slog.Info("开始执行打卡", "label", label)
@@ -288,14 +292,6 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 
 	// 打卡结果通知
 	co.notifyResult(result)
-}
-
-func (co *CheckinOrchestrator) setupGPS(cfg *config.Config) {
-	if cfg.MuMu.GpsLatitude == 0 && cfg.MuMu.GpsLongitude == 0 {
-		return
-	}
-	// 在打卡执行器中已经通过 automator 设置了 GPS
-	slog.Info("已配置 GPS 定位", "lat", cfg.MuMu.GpsLatitude, "lon", cfg.MuMu.GpsLongitude)
 }
 
 func (co *CheckinOrchestrator) recordResult(actionName string, success bool, message, timestamp string) {

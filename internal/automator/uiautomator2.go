@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -254,6 +255,41 @@ func (u *UIAutomator2Impl) SendKeyEvent(keyCode int) error {
 	if !ok {
 		return fmt.Errorf("发送按键事件 %d 失败: %s", keyCode, msg)
 	}
+	return nil
+}
+
+// SetGPS 通过 MuMuManager 设置 GPS 虚拟定位
+func (u *UIAutomator2Impl) SetGPS(latitude, longitude float64) error {
+	if latitude == 0 && longitude == 0 {
+		return nil
+	}
+
+	// 查找 MuMuManager.exe
+	managerPaths := []string{
+		`D:\MuMuPlayer\nx_device\12.0\nx_main\MuMuManager.exe`,
+		`C:\MuMuPlayer\nx_device\12.0\nx_main\MuMuManager.exe`,
+	}
+
+	var managerPath string
+	for _, p := range managerPaths {
+		if _, err := os.Stat(p); err == nil {
+			managerPath = p
+			break
+		}
+	}
+	if managerPath == "" {
+		return fmt.Errorf("未找到 MuMuManager.exe")
+	}
+
+	cmd := exec.Command(managerPath, "control", "-v", "0", "tool", "location",
+		"-lat", fmt.Sprintf("%f", latitude),
+		"-lon", fmt.Sprintf("%f", longitude),
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("GPS 设置失败: %v (output: %s)", err, string(output))
+	}
+	slog.Info("GPS 已设置", "lat", latitude, "lon", longitude)
 	return nil
 }
 
