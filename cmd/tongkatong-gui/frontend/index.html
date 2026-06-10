@@ -232,10 +232,10 @@
           loadConfig();
           refreshStatus();
           setInterval(refreshStatus, 3000);
-          // Register log callback
-          if (window.runtime && window.runtime.Callback) {
-            window.runtime.Callback('RegisterLogCallback', (msg, level) => {
-              logContent.value += '[' + level + '] ' + msg + '\n';
+          // Register log callback via Wails EventsOn
+          if (window.runtime && window.runtime.EventsOn) {
+            window.runtime.EventsOn('log', (data) => {
+              logContent.value += '[' + (data.level || 'INFO') + '] ' + (data.message || '') + '\n';
               scrollLog();
             });
           }

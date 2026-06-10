@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -207,37 +208,6 @@ func (cm *ConfigManager) ConfigDir() string {
 	return cm.configDir
 }
 
-func (cm *ConfigManager) loadMerged() *Config {
-	// 1. 从内置默认开始
-	cfg := defaultConfig()
-
-	// 2. 尝试加载 default.json 覆盖
-	if data, err := os.ReadFile(filepath.Join(cm.configDir, "default.json")); err == nil {
-		var defCfg Config
-		if err := json.Unmarshal(data, &defCfg); err == nil {
-			cfg = merge(cfg, &defCfg)
-		}
-	}
-
-	// 3. 用户配置覆盖
-	userExists := true
-	if data, err := os.ReadFile(cm.configFile); err == nil {
-		var userCfg Config
-		if err := json.Unmarshal(data, &userCfg); err == nil {
-			cfg = merge(cfg, &userCfg)
-		}
-	} else if os.IsNotExist(err) {
-		userExists = false
-	}
-
-	// 4. 首次运行：保存默认配置到 user_config.json
-	if !userExists {
-		_ = cm.writeConfig(cfg)
-	}
-
-	return cfg
-}
-
 func (cm *ConfigManager) writeConfig(cfg *Config) error {
 	_ = os.MkdirAll(cm.configDir, 0755)
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -255,177 +225,61 @@ func (cm *ConfigManager) writeConfig(cfg *Config) error {
 	return nil
 }
 
-// ── 深层合并 ────────────────────────────────────────────────────────
+// ── JSON 层级合并 ───────────────────────────────────────────────────
 
-// merge 将 src 的非零值字段合并到 dst 中（dst 的零值字段被 src 覆盖）
-func merge(dst, src *Config) *Config {
-	// 逐字段手动合并，确保嵌套结构正确
-	dst.MuMu = mergeMuMu(dst.MuMu, src.MuMu)
-	dst.App = mergeApp(dst.App, src.App)
-	dst.Holiday = mergeHoliday(dst.Holiday, src.Holiday)
-	dst.Notification = mergeNotification(dst.Notification, src.Notification)
-	dst.Update = mergeUpdate(dst.Update, src.Update)
-	dst.RandomDelay = mergeRandomDelay(dst.RandomDelay, src.RandomDelay)
-	dst.AppState = mergeAppState(dst.AppState, src.AppState)
-	dst.MakeupWindow = mergeMakeupWindow(dst.MakeupWindow, src.MakeupWindow)
-	dst.Advanced = mergeAdvanced(dst.Advanced, src.Advanced)
+func (cm *ConfigManager) loadMerged() *Config {
+	cfg := defaultConfig()
 
-	// Checkin map：逐条目合并，不覆盖用户未提供的条目
-	if src.Checkin != nil {
-		if dst.Checkin == nil {
-			dst.Checkin = make(map[string]CheckinEntry)
-		}
-		for k, v := range src.Checkin {
-			dst.Checkin[k] = v
+	mergedMap := make(map[string]json.RawMessage)
+	builtinData, _ := json.Marshal(cfg)
+	json.Unmarshal(builtinData, &mergedMap)
+
+	if data, err := os.ReadFile(filepath.Join(cm.configDir, "default.json")); err == nil {
+		var overrideMap map[string]json.RawMessage
+		if err := json.Unmarshal(data, &overrideMap); err == nil {
+			deepMergeMap(mergedMap, overrideMap)
 		}
 	}
 
-	return dst
+	userExists := true
+	if data, err := os.ReadFile(cm.configFile); err == nil {
+		var overrideMap map[string]json.RawMessage
+		if err := json.Unmarshal(data, &overrideMap); err == nil {
+			deepMergeMap(mergedMap, overrideMap)
+		}
+	} else if os.IsNotExist(err) {
+		userExists = false
+	}
+
+	mergedData, _ := json.Marshal(mergedMap)
+	var result Config
+	if err := json.Unmarshal(mergedData, &result); err != nil {
+		slog.Error("配置合并解析失败，使用内置默认", "error", err)
+		return cfg
+	}
+
+	if !userExists {
+		cm.cfg = &result
+		_ = cm.writeConfig(&result)
+	}
+
+	return &result
 }
 
-func mergeMuMu(dst, src MuMuConfig) MuMuConfig {
-	if src.Host != "" {
-		dst.Host = src.Host
+// deepMergeMap 深度合并两个 JSON map（override 覆盖 base 的对应 key）
+func deepMergeMap(base, override map[string]json.RawMessage) {
+	for k, v := range override {
+		var baseVal, overrideVal map[string]json.RawMessage
+		if baseRaw, ok := base[k]; ok {
+			if err := json.Unmarshal(baseRaw, &baseVal); err == nil {
+				if err := json.Unmarshal(v, &overrideVal); err == nil {
+					deepMergeMap(baseVal, overrideVal)
+					merged, _ := json.Marshal(baseVal)
+					base[k] = merged
+					continue
+				}
+			}
+		}
+		base[k] = v
 	}
-	if src.Port != 0 {
-		dst.Port = src.Port
-	}
-	if src.AdbPath != "" {
-		dst.AdbPath = src.AdbPath
-	}
-	if src.MuMuExePath != "" {
-		dst.MuMuExePath = src.MuMuExePath
-	}
-	if src.GpsLatitude != 0 {
-		dst.GpsLatitude = src.GpsLatitude
-	}
-	if src.GpsLongitude != 0 {
-		dst.GpsLongitude = src.GpsLongitude
-	}
-	return dst
-}
-
-func mergeApp(dst, src AppConfig) AppConfig {
-	if src.PackageName != "" {
-		dst.PackageName = src.PackageName
-	}
-	if src.Activity != "" {
-		dst.Activity = src.Activity
-	}
-	return dst
-}
-
-func mergeHoliday(dst, src HolidayConfig) HolidayConfig {
-	if !src.SkipWeekend {
-		dst.SkipWeekend = src.SkipWeekend
-	}
-	if !src.SkipHoliday {
-		dst.SkipHoliday = src.SkipHoliday
-	}
-	if src.ExtraWorkdays != nil {
-		dst.ExtraWorkdays = src.ExtraWorkdays
-	}
-	if src.ExtraHolidays != nil {
-		dst.ExtraHolidays = src.ExtraHolidays
-	}
-	return dst
-}
-
-func mergeNotification(dst, src NotificationConfig) NotificationConfig {
-	if src.Enabled {
-		dst.Enabled = src.Enabled
-	}
-	if src.Webhook != "" {
-		dst.Webhook = src.Webhook
-	}
-	if !src.VerifyTLS {
-		dst.VerifyTLS = src.VerifyTLS
-	}
-	return dst
-}
-
-func mergeUpdate(dst, src UpdateConfig) UpdateConfig {
-	if src.ManifestURL != "" {
-		dst.ManifestURL = src.ManifestURL
-	}
-	if src.AutoCheckOnStartup {
-		dst.AutoCheckOnStartup = src.AutoCheckOnStartup
-	}
-	return dst
-}
-
-func mergeRandomDelay(dst, src RandomDelayConfig) RandomDelayConfig {
-	if src.MinSeconds != 0 {
-		dst.MinSeconds = src.MinSeconds
-	}
-	if src.MaxSeconds != 0 {
-		dst.MaxSeconds = src.MaxSeconds
-	}
-	return dst
-}
-
-func mergeAppState(dst, src AppStateConfig) AppStateConfig {
-	if src.AutoConnect {
-		dst.AutoConnect = src.AutoConnect
-	}
-	if src.AutoStart {
-		dst.AutoStart = src.AutoStart
-	}
-	if src.KeepAliveEnabled {
-		dst.KeepAliveEnabled = src.KeepAliveEnabled
-	}
-	if src.RecoveryBaseBackoffSeconds != 0 {
-		dst.RecoveryBaseBackoffSeconds = src.RecoveryBaseBackoffSeconds
-	}
-	if src.RecoveryMaxBackoffSeconds != 0 {
-		dst.RecoveryMaxBackoffSeconds = src.RecoveryMaxBackoffSeconds
-	}
-	if src.RecoveryMaxFailures != 0 {
-		dst.RecoveryMaxFailures = src.RecoveryMaxFailures
-	}
-	if src.RecoveryPauseMinutesAfterMax != 0 {
-		dst.RecoveryPauseMinutesAfterMax = src.RecoveryPauseMinutesAfterMax
-	}
-	if src.RecoveryQuietHoursEnabled {
-		dst.RecoveryQuietHoursEnabled = src.RecoveryQuietHoursEnabled
-	}
-	if src.RecoveryQuietStartHour != 0 {
-		dst.RecoveryQuietStartHour = src.RecoveryQuietStartHour
-	}
-	if src.RecoveryQuietEndHour != 0 {
-		dst.RecoveryQuietEndHour = src.RecoveryQuietEndHour
-	}
-	return dst
-}
-
-func mergeMakeupWindow(dst, src MakeupWindowConfig) MakeupWindowConfig {
-	if src.MorningSignin != nil {
-		dst.MorningSignin = src.MorningSignin
-	}
-	if src.MorningSignout != nil {
-		dst.MorningSignout = src.MorningSignout
-	}
-	if src.AfternoonSignin != nil {
-		dst.AfternoonSignin = src.AfternoonSignin
-	}
-	if src.AfternoonSignout != nil {
-		dst.AfternoonSignout = src.AfternoonSignout
-	}
-	return dst
-}
-
-func mergeAdvanced(dst, src AdvancedConfig) AdvancedConfig {
-	if src.SessionTTLSeconds != 0 {
-		dst.SessionTTLSeconds = src.SessionTTLSeconds
-	}
-	if src.MisfireGraceSeconds != 0 {
-		dst.MisfireGraceSeconds = src.MisfireGraceSeconds
-	}
-	if src.NetworkProbe.Targets != nil {
-		dst.NetworkProbe.Targets = src.NetworkProbe.Targets
-	}
-	if src.NetworkProbe.TimeoutSeconds != 0 {
-		dst.NetworkProbe.TimeoutSeconds = src.NetworkProbe.TimeoutSeconds
-	}
-	return dst
 }

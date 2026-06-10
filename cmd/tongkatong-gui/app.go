@@ -15,11 +15,13 @@ import (
 	"github.com/juice4927/tongkatong/internal/holiday"
 	"github.com/juice4927/tongkatong/internal/models"
 	"github.com/juice4927/tongkatong/internal/utils"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App Wails 后端应用
 type App struct {
 	mu              sync.Mutex
+	ctx             context.Context
 	configManager   *config.ConfigManager
 	baseDir         string
 	adbHelper       *adb.ADBHelper
@@ -31,7 +33,6 @@ type App struct {
 
 	isConnected     bool
 	isRunning       bool
-	logCallbacks    []func(string, string)
 }
 
 // NewApp 创建 App 实例
@@ -39,24 +40,22 @@ func NewApp(cm *config.ConfigManager, baseDir string) *App {
 	return &App{
 		configManager: cm,
 		baseDir:       baseDir,
-		logCallbacks:  make([]func(string, string), 0),
 	}
 }
 
 func (a *App) startup(ctx context.Context) {
-	slog.Info("GUI 启动完成")
-	// 注册日志回调
+	a.ctx = ctx
+
+	// 注册日志回调 → Wails EventsEmit → 前端 EventsOn("log", ...)
 	lm := utils.GetLogManager()
 	lm.AddCallback(func(msg, level string) {
-		a.mu.Lock()
-		callbacks := make([]func(string, string), len(a.logCallbacks))
-		copy(callbacks, a.logCallbacks)
-		a.mu.Unlock()
-		for _, cb := range callbacks {
-			cb(msg, level)
-		}
+		runtime.EventsEmit(ctx, "log", map[string]string{
+			"message": msg,
+			"level":   level,
+		})
 	})
-	_ = ctx
+
+	slog.Info("GUI 启动完成")
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -73,12 +72,8 @@ func (a *App) shutdown(ctx context.Context) {
 
 // ── 日志桥接 ───────────────────────────────────────────────────────
 
-// RegisterLogCallback 注册前端日志回调
-func (a *App) RegisterLogCallback(cb func(string, string)) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.logCallbacks = append(a.logCallbacks, cb)
-}
+// RegisterLogCallback 注册前端日志回调（通过 Wails EventsOn 机制）
+// 前端应调用 window.runtime.EventsOn("log", (data) => {...})
 
 // ── 获取信息 ──────────────────────────────────────────────────────
 

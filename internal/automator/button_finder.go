@@ -5,17 +5,6 @@ import (
 	"time"
 )
 
-// ── 已打卡时间范围 ──────────────────────────────────────────────────
-
-// AlreadyCheckedInRanges 已打卡时间范围判断
-// key: (isMorning, isSignin) → func(h, m int) bool
-var AlreadyCheckedInRanges = map[[2]bool]func(h, m int) bool{
-	{true, true}:   func(h, m int) bool { return 5 <= h && h < 8 },                          // 上午签到
-	{true, false}:  func(h, m int) bool { return (h == 11 && m >= 30) || (12 <= h && h < 13) || (h == 13 && m == 0) }, // 上午签退
-	{false, true}:  func(h, m int) bool { return (12 <= h && h < 13) || (h == 13 && m <= 30) },                     // 下午签到
-	{false, false}: func(h, m int) bool { return 17 <= h || h < 4 },                          // 下午签退
-}
-
 // ── ButtonFinder ───────────────────────────────────────────────────
 
 // ButtonFinder 打卡按钮查找器（三级降级策略）
@@ -59,17 +48,27 @@ func (bf *ButtonFinder) DefaultFindAndClick(action CheckinAction, actionText str
 	return FindAndClickResult{Clicked: false, Message: "需 device 执行"}
 }
 
-// IsAlreadyCheckedIn 判断是否已打卡（根据当前时间与动作类型）
-func IsAlreadyCheckedIn(action CheckinAction) bool {
-	now := time.Now()
-	h, m := now.Hour(), now.Minute()
-	isMorning, isSignin, _ := ResolveActionSlot(action)
-
-	check, ok := AlreadyCheckedInRanges[[2]bool{isMorning, isSignin}]
-	if !ok {
+// IsAlreadyCheckedIn 判断该时段是否已打卡（通过 UI 按钮状态判断）
+//
+//	注意：不能仅靠时间判断，因为时间范围可能与调度窗口重叠。
+//	如果 device 参数非空，将通过 XML 解析检查按钮是否已变为时间文本。
+//	如果 device 为 nil，返回 false（让执行流程继续，由 Actual verification 决定）。
+func IsAlreadyCheckedIn(action CheckinAction, device DeviceOperator) bool {
+	if device == nil {
 		return false
 	}
-	return check(h, m)
+
+	// 通过 XML 解析检查按钮状态
+	xml, err := device.DumpHierarchy()
+	if err != nil {
+		return false
+	}
+	nodes := ParseHierarchyXML(xml)
+	w, _, _ := device.WindowSize()
+	midX := w / 2
+
+	// 检查目标行是否已变为时间文本（不可点击）
+	return VerifyTargetRowTransition(nodes, action, midX)
 }
 
 // ── 按钮查找策略 ───────────────────────────────────────────────────

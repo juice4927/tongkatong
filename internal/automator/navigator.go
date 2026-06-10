@@ -27,6 +27,7 @@ type DeviceOperator interface {
 	CloseApp(packageName string) bool
 	Screenshot() ([]byte, error)
 	WindowSize() (width, height int, err error)
+	SendKeyEvent(keyCode int) error
 }
 
 // NewNavigator 创建导航器
@@ -154,14 +155,21 @@ func (n *Navigator) tryNavigateWorkbenchToCheckin(maxAttempts int) bool {
 }
 
 // ReturnToHome 打卡完成后返回工作台
+//
+//	使用 ADB keyevent KEYCODE_BACK 逐层返回直到看到"工作台"入口
 func (n *Navigator) ReturnToHome() {
-	// 尝试按返回键直到回到主界面
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 6; i++ {
 		if n.device.TextExists("工作台") {
+			slog.Debug("已回到工作台页面")
 			return
 		}
-		// 模拟返回: 通过点击空白区域或发送返回指令
-		_ = n.device.ClickText("返回")
+		// 发送系统返回键 (KEYCODE_BACK = 4)
+		if ierr, ok := n.device.(interface{ SendKeyEvent(int) error }); ok {
+			if err := ierr.SendKeyEvent(4); err != nil {
+				slog.Warn("发送返回键失败", "error", err)
+			}
+		}
 		time.Sleep(1 * time.Second)
 	}
+	slog.Debug("返回工作台操作完成（已达最大重试次数）")
 }

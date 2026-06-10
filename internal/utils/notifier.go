@@ -43,22 +43,24 @@ func SendServerChan(sendkey string, title string, desp string, verifyTLS bool) b
 			slog.Error("Server酱通知失败（已重试）", "error", err)
 			return false
 		}
-		defer resp.Body.Close()
 
-		if resp.StatusCode >= 500 && attempt < maxRetries {
+		shouldRetry := resp.StatusCode >= 500 && attempt < maxRetries
+		isSuccess := resp.StatusCode == 200
+		var result map[string]interface{}
+
+		if isSuccess {
+			json.NewDecoder(resp.Body).Decode(&result)
+		}
+		resp.Body.Close()
+
+		if shouldRetry {
 			slog.Warn("Server酱服务端错误，5秒后重试", "status", resp.StatusCode)
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		if resp.StatusCode != 200 {
+		if !isSuccess {
 			slog.Warn("Server酱通知发送失败", "status", resp.StatusCode)
-			return false
-		}
-
-		var result map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			slog.Warn("Server酱响应解析失败", "error", err)
 			return false
 		}
 

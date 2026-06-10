@@ -85,18 +85,35 @@ func (h *DialogHandler) ClickButtonByText(texts []string) bool {
 }
 
 // clickByMirror 镜像法：通过已知按钮位置推算目标按钮位置
+//
+//	在 Android 弹窗中，"确定"和"取消"通常水平对称于屏幕中线。
+//	找到已知按钮的 bounds，推算另一按钮的位置并点击。
 func (h *DialogHandler) clickByMirror(knowText string, screenW int, isCancel bool) bool {
-	// 先尝试通过 ClickText 获取按钮位置——实际需要检查是否存在
-	if !h.device.TextExists(knowText) {
+	// 通过 XML 解析查找已知按钮的位置
+	xml, err := h.device.DumpHierarchy()
+	if err != nil {
 		return false
 	}
 
-	// 简化实现：假设两个按钮水平对称
-	// 在实际完整实现中，我们会用 XML 解析获取已知按钮的 bounds
-	// 这里通过 ClickText 本身去找到并点击
-	if isCancel {
-		// 取消按钮通常在右侧对称位置，但更简单的是直接尝试点击
-		return false
+	nodes := ParseHierarchyXML(xml)
+	for _, n := range nodes {
+		if n.BoundsParsed == nil {
+			continue
+		}
+		if n.Text == knowText {
+			// 已知按钮在 (x1, y1, x2, y2)
+			r := n.BoundsParsed
+			// 推算目标按钮：X 对称于屏幕中线，Y 相同
+			targetX := screenW - r.CenterX()
+			targetY := r.CenterY()
+			slog.Info("镜像法推算按钮位置", "known", knowText,
+				"known_center", r.CenterX(), "target_x", targetX, "target_y", targetY)
+			if err := h.device.Click(targetX, targetY); err == nil {
+				time.Sleep(1 * time.Second)
+				return true
+			}
+			return false
+		}
 	}
 	return false
 }

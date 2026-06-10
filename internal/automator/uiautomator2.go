@@ -227,6 +227,15 @@ func (u *UIAutomator2Impl) WindowSize() (int, int, error) {
 	return 1080, 1920, nil
 }
 
+// SendKeyEvent 发送按键事件
+func (u *UIAutomator2Impl) SendKeyEvent(keyCode int) error {
+	ok, msg := u.adbHelper.Shell("", fmt.Sprintf("input keyevent %d", keyCode), 5*time.Second)
+	if !ok {
+		return fmt.Errorf("发送按键事件 %d 失败: %s", keyCode, msg)
+	}
+	return nil
+}
+
 // ── 打卡执行 ───────────────────────────────────────────────────────
 
 // DoCheckin 执行一次完整的打卡流程
@@ -254,7 +263,7 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 	}
 
 	// 2. 打卡前检查是否已打卡
-	if IsAlreadyCheckedIn(action) {
+	if IsAlreadyCheckedIn(action, u) {
 		slog.Info("该时段已打卡，跳过")
 		return &models.CheckinResult{
 			Success:   true,
