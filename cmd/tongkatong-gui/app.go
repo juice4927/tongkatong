@@ -129,15 +129,15 @@ func (a *App) GetCheckinTimes() map[string]interface{} {
 
 // ── 操作 ──────────────────────────────────────────────────────────
 
-// ConnectDevice 连接设备
+// ConnectDevice 连接设备（匹配 Python 版逻辑：多端口尝试 + 自动启动 MuMu）
 func (a *App) ConnectDevice() string {
 	cfg := a.configManager.Config()
 
+	// 初始化 ADB（自动查找 MuMu 自带的 adb）
 	a.adbHelper = adb.NewADBHelper(cfg.MuMu.AdbPath)
-	a.devicePool = adb.NewDevicePool(a.adbHelper, time.Duration(cfg.Advanced.SessionTTLSeconds)*time.Second)
 	a.mumuHelper = adb.NewMuMuHelper(cfg.MuMu.AdbPath, cfg.MuMu.MuMuExePath)
+	a.devicePool = adb.NewDevicePool(a.adbHelper, time.Duration(cfg.Advanced.SessionTTLSeconds)*time.Second)
 
-	// 自动查找 ADB（用户未配置路径时自动探测 MuMu 自带 adb）
 	foundPath := a.mumuHelper.FindAdb()
 	if foundPath != "" && foundPath != "adb" && foundPath != cfg.MuMu.AdbPath {
 		slog.Info("自动发现 MuMu ADB", "path", foundPath)
@@ -145,38 +145,74 @@ func (a *App) ConnectDevice() string {
 		a.mumuHelper = adb.NewMuMuHelper(foundPath, cfg.MuMu.MuMuExePath)
 	}
 
-	ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, cfg.MuMu.Port)
-	if ok {
-		a.isConnected = true
+	// 端口候选项（匹配 Python 版：配置端口 → 7555 → 5555）
+	ports := uniquePorts(cfg.MuMu.Port)
 
-		// 初始化自动化引擎
-		a.automator = automator.NewUIAutomator2Impl(
-			cfg.MuMu.Host, cfg.MuMu.Port,
-			a.adbHelper.GetADBPath(),
-			cfg.App.PackageName,
-			a.devicePool,
-		)
-		a.automator.SetMuMuHelper(a.mumuHelper)
-
-		// 初始化节假日判断
-		a.holidayChecker = holiday.NewHolidayChecker(
-			cfg.Holiday.SkipWeekend,
-			cfg.Holiday.SkipHoliday,
-			cfg.Holiday.ExtraWorkdays,
-			cfg.Holiday.ExtraHolidays,
-		)
-
-		// 尝试更新节假日数据
-		holidayCachePath := filepath.Join(a.baseDir, "holidays.json")
-		a.holidayChecker.SetLocalCachePath(holidayCachePath)
-
-		return "连接成功: " + msg
+	// 第一阶段：直接尝试连接各端口
+	for _, port := range ports {
+		ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, port)
+		if ok {
+			a.isConnected = true
+			a.initEngine(cfg)
+			// 用实际连接的端口更新配置
+			cfg.MuMu.Port = port
+			_ = a.configManager.SaveConfig(cfg)
+			return fmt.Sprintf("连接成功: %s (端口 %d)", msg, port)
+		}
+		slog.Info("端口连接失败，尝试下一个", "port", port, "msg", msg)
 	}
 
-	if msg == "" {
-		return fmt.Sprintf("连接失败: ADB 不可用 (路径: %s)。请在设置中配置正确的 ADB 路径，或确保 MuMu 模拟器已启动。", a.adbHelper.GetADBPath())
+	// 第二阶段：所有端口失败 → 尝试启动 MuMu
+	slog.Info("所有端口连接失败，尝试启动 MuMu 模拟器")
+	launched, launchMsg := a.mumuHelper.LaunchMuMu(a.adbHelper, cfg.MuMu.Host, cfg.MuMu.Port, 60)
+	if !launched {
+		return "连接失败: " + launchMsg
 	}
-	return "连接失败: " + msg
+
+	// MuMu 已启动，重新尝试所有端口
+	for _, port := range ports {
+		ok, msg := a.adbHelper.Connect(cfg.MuMu.Host, port)
+		if ok {
+			a.isConnected = true
+			a.initEngine(cfg)
+			cfg.MuMu.Port = port
+			_ = a.configManager.SaveConfig(cfg)
+			return fmt.Sprintf("连接成功: %s (MuMu 已自动启动, 端口 %d)", msg, port)
+		}
+	}
+
+	return fmt.Sprintf("连接失败: MuMu 已启动但 ADB 连接超时 (已尝试端口: %v)", ports)
+}
+
+func uniquePorts(configured int) []int {
+	seen := map[int]bool{}
+	var result []int
+	for _, p := range []int{configured, 7555, 5555} {
+		if p > 0 && !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+func (a *App) initEngine(cfg *config.Config) {
+	a.automator = automator.NewUIAutomator2Impl(
+		cfg.MuMu.Host, cfg.MuMu.Port,
+		a.adbHelper.GetADBPath(),
+		cfg.App.PackageName,
+		a.devicePool,
+	)
+	a.automator.SetMuMuHelper(a.mumuHelper)
+
+	a.holidayChecker = holiday.NewHolidayChecker(
+		cfg.Holiday.SkipWeekend,
+		cfg.Holiday.SkipHoliday,
+		cfg.Holiday.ExtraWorkdays,
+		cfg.Holiday.ExtraHolidays,
+	)
+	holidayCachePath := filepath.Join(a.baseDir, "holidays.json")
+	a.holidayChecker.SetLocalCachePath(holidayCachePath)
 }
 
 // DisconnectDevice 断开设备
