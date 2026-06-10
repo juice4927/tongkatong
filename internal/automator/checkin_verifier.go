@@ -3,6 +3,8 @@ package automator
 import (
 	"log/slog"
 	"time"
+
+	"github.com/juice4927/tongkatong/internal/models"
 )
 
 // ── 打卡验证模块 ────────────────────────────────────────────────────
