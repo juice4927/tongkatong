@@ -18,6 +18,9 @@ node_modules/
 *~
 *.tmp
 
+# Build output
+build_out/
+
 # Tools artifacts
 .codegraph/
 .reasonix/

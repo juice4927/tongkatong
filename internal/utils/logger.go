@@ -56,7 +56,6 @@ func GetLogManager() *LogManager {
 func SetupLogging(logDir string, level string, consoleOutput bool) error {
 	lm := GetLogManager()
 	lm.mu.Lock()
-	defer lm.mu.Unlock()
 
 	lm.logDir = logDir
 
@@ -113,6 +112,7 @@ func SetupLogging(logDir string, level string, consoleOutput bool) error {
 
 	lm.logger = slog.New(handler)
 	slog.SetDefault(lm.logger)
+	lm.mu.Unlock()
 
 	slog.Info("日志系统初始化完成", "logDir", logDir, "level", level)
 	return nil
