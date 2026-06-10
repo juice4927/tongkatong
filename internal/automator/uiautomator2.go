@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -210,8 +211,11 @@ func (u *UIAutomator2Impl) WindowSize() (int, int, error) {
 		last := parts[len(parts)-1]
 		dim := strings.Split(last, "x")
 		if len(dim) == 2 {
-			w, _ := parseInt(dim[0])
-			h, _ := parseInt(dim[1])
+			w, err := strconv.Atoi(dim[0])
+			h, err2 := strconv.Atoi(dim[1])
+			if err != nil || err2 != nil {
+				return 1080, 1920, nil
+			}
 			if w > 0 && h > 0 {
 				return w, h, nil
 			}

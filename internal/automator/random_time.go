@@ -1,7 +1,6 @@
 package automator
 
 import (
-	"fmt"
 	"math/rand"
 	"time"
 )

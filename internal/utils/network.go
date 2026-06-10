@@ -3,7 +3,6 @@ package utils
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"time"
 )
