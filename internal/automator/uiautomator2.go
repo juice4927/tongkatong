@@ -35,6 +35,7 @@ type UIAutomator2Impl struct {
 	deviceAddr string
 
 	baseDir   string // 工作目录，用于诊断文件输出
+	mumuHelper *adb.MuMuHelper // GPS 设置委托
 
 	navigator *Navigator
 	verifier  *CheckinVerifier
@@ -46,13 +47,21 @@ func NewUIAutomator2Impl(host string, port int, adbPath string, packageName stri
 		packageName = "com.tencent.weworklocal"
 	}
 
+	var adbHelper *adb.ADBHelper
+	if pool != nil {
+		adbHelper = pool.ADB()
+	}
+	if adbHelper == nil {
+		adbHelper = adb.NewADBHelper(adbPath)
+	}
+
 	impl := &UIAutomator2Impl{
 		host:        host,
 		port:        port,
 		adbPath:     adbPath,
 		packageName: packageName,
 		pool:        pool,
-		adbHelper:   pool.ADB(),
+		adbHelper:   adbHelper,
 		deviceAddr:  fmt.Sprintf("%s:%d", host, port),
 	}
 
@@ -65,6 +74,11 @@ func NewUIAutomator2Impl(host string, port int, adbPath string, packageName stri
 // SetBaseDir 设置工作目录（用于诊断文件输出）
 func (u *UIAutomator2Impl) SetBaseDir(dir string) {
 	u.baseDir = dir
+}
+
+// SetMuMuHelper 设置 MuMu 管理器（用于 GPS 等模拟器操作）
+func (u *UIAutomator2Impl) SetMuMuHelper(h *adb.MuMuHelper) {
+	u.mumuHelper = h
 }
 
 // Connect 连接设备
@@ -262,7 +276,15 @@ func (u *UIAutomator2Impl) SetGPS(latitude, longitude float64) error {
 		return nil
 	}
 
-	// 查找 MuMuManager.exe
+	if u.mumuHelper != nil {
+		ok, msg := u.mumuHelper.SetGPS(latitude, longitude)
+		if !ok {
+			return fmt.Errorf("GPS 设置失败: %s", msg)
+		}
+		return nil
+	}
+
+	// 降级：硬编码路径搜索（当 MuMuHelper 不可用时）
 	managerPaths := []string{
 		`D:\MuMuPlayer\nx_device\12.0\nx_main\MuMuManager.exe`,
 		`C:\MuMuPlayer\nx_device\12.0\nx_main\MuMuManager.exe`,

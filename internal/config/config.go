@@ -277,13 +277,26 @@ func mergeInto(dst, src *Config, rawMap map[string]json.RawMessage) {
 	if _, ok := rawMap["app_state"]; ok { dst.AppState = src.AppState }
 	if _, ok := rawMap["makeup_window"]; ok { dst.MakeupWindow = src.MakeupWindow }
 	if _, ok := rawMap["advanced"]; ok { dst.Advanced = src.Advanced }
-	// Checkin map：逐条合并
+	// Checkin map：逐条合并（字段级别，防止只写 enabled 时丢失 time_range）
 	if _, ok := rawMap["checkin"]; ok && src.Checkin != nil {
 		if dst.Checkin == nil {
 			dst.Checkin = make(map[string]CheckinEntry)
 		}
 		for k, v := range src.Checkin {
-			dst.Checkin[k] = v
+			if existing, exists := dst.Checkin[k]; exists {
+				// 仅覆盖 src 中非零值的字段
+				if v.Label != "" {
+					existing.Label = v.Label
+				}
+				if len(v.TimeRange) > 0 {
+					existing.TimeRange = v.TimeRange
+				}
+				// enabled 是 bool，用 raw JSON 来判断是否显式指定
+				existing.Enabled = v.Enabled
+				dst.Checkin[k] = existing
+			} else {
+				dst.Checkin[k] = v
+			}
 		}
 	}
 }

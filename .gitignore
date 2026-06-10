@@ -17,3 +17,7 @@ node_modules/
 # Temp
 *~
 *.tmp
+
+# Tools artifacts
+.codegraph/
+.reasonix/

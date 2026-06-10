@@ -14,7 +14,8 @@ import (
 var (
 	// 匹配 HH:MM 格式，00:00-23:59
 	timePattern   = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
-	invalidXML    = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]`)
+	// 移除 XML 非法控制字符（保留 \x09 \x0a \x0d，移除其他 C0 控制字符）
+	invalidXML    = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f]`)
 )
 
 // UINode UI 节点信息

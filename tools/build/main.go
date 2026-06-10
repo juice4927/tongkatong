@@ -100,12 +100,16 @@ func readCurrentVersion() string {
 }
 
 func generateManifest(ver, distDir string) error {
+	owner := os.Getenv("GITHUB_REPOSITORY_OWNER")
+	if owner == "" {
+		owner = "juice4927" // 默认仓库所有者
+	}
 	manifest := map[string]interface{}{
 		"version": ver,
 		"assets": map[string]interface{}{
 			"default": map[string]string{
 				"file_name": fmt.Sprintf("tongkatong_v%s.exe", ver),
-				"url":       fmt.Sprintf("https://github.com/%s/%s/releases/download/v%s/tongkatong_v%s.exe", os.Getenv("GITHUB_REPOSITORY_OWNER"), "tongkatong", ver, ver),
+				"url":       fmt.Sprintf("https://github.com/%s/tongkatong/releases/download/v%s/tongkatong_v%s.exe", owner, ver, ver),
 			},
 		},
 		"notes":       fmt.Sprintf("通卡通 v%s 发布", ver),

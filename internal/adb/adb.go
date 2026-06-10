@@ -59,7 +59,10 @@ func (a *ADBHelper) GetADBPath() string {
 
 // runCommand 执行 adb 命令，返回 (success, stdout_string)
 func (a *ADBHelper) runCommand(args []string, timeout time.Duration) (bool, string) {
-	ok, stdout, _ := a.runCommandRaw(args, timeout)
+	ok, stdout, stderr := a.runCommandRaw(args, timeout)
+	if !ok && len(stderr) > 0 {
+		slog.Debug("ADB 命令失败", "args", args, "stderr", string(stderr))
+	}
 	return ok, string(stdout)
 }
 

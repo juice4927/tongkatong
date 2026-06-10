@@ -148,7 +148,7 @@ func FindTimeNearCurrent(rightNodes []struct {
 		if diff > 720 {
 			diff = 1440 - diff
 		}
-		if diff <= 3 {
+		if diff <= 5 {
 			slog.Info("找到接近当前时间的时间节点", "time", rn.Time, "diff_minutes", diff)
 			return rn.Time, rn.Rect, true
 		}

@@ -100,6 +100,7 @@ func main() {
 			cfg.App.PackageName,
 			devicePool,
 		)
+		uia.SetMuMuHelper(mumu)
 		hc := holiday.NewHolidayChecker(
 			cfg.Holiday.SkipWeekend,
 			cfg.Holiday.SkipHoliday,

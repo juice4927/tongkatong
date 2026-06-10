@@ -80,6 +80,10 @@ func SetupLogging(logDir string, level string, consoleOutput bool) error {
 		_ = os.MkdirAll(logDir, 0755)
 		now := time.Now()
 		logFilePath := filepath.Join(logDir, fmt.Sprintf("checkin_%s.log", now.Format("2006-01-02")))
+		// 关闭旧日志文件（防止多次调用 SetupLogging 泄漏句柄）
+		if lm.logFile != nil {
+			_ = lm.logFile.Close()
+		}
 		f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
 			lm.logFile = f
@@ -160,7 +164,7 @@ func (lm *LogManager) AddCallback(cb LogCallback) {
 	lm.callbacks = append(lm.callbacks, cb)
 }
 
-// Close 关闭日志文件
+// Close 关闭日志文件并清理资源
 func (lm *LogManager) Close() {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -168,4 +172,5 @@ func (lm *LogManager) Close() {
 		_ = lm.logFile.Close()
 		lm.logFile = nil
 	}
+	lm.callbacks = nil
 }

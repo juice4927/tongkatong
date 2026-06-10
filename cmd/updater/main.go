@@ -54,13 +54,15 @@ func main() {
 
 	writeState("waiting_exit", "等待旧进程退出...")
 
-	// 等待旧进程退出（最多 20 秒）
-	// 通过检查当前进程的父进程是否退出
-	for i := 0; i < 40; i++ {
-		// 检查目标文件是否可写（进程退出后文件不再被锁定）
-		f, err := os.OpenFile(*target, os.O_WRONLY|os.O_APPEND, 0)
-		if err == nil {
-			f.Close()
+	// 等待旧进程退出（最多 10 秒）
+	// 主进程在启动更新器后会立即退出，此处等待是为了安全
+	time.Sleep(500 * time.Millisecond)
+
+	for i := 0; i < 20; i++ {
+		// 尝试重命名目标文件来确认进程已退出（Windows 上更可靠）
+		tmpPath := *target + ".swap_test"
+		if err := os.Rename(*target, tmpPath); err == nil {
+			_ = os.Rename(tmpPath, *target) // 还原
 			break
 		}
 		time.Sleep(500 * time.Millisecond)

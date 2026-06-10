@@ -153,6 +153,7 @@ func (a *App) ConnectDevice() string {
 			cfg.App.PackageName,
 			a.devicePool,
 		)
+		a.automator.SetMuMuHelper(a.mumuHelper)
 
 		// 初始化节假日判断
 		a.holidayChecker = holiday.NewHolidayChecker(

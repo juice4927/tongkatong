@@ -158,7 +158,7 @@ func (n *Navigator) tryNavigateWorkbenchToCheckin(maxAttempts int) bool {
 //
 //	使用 ADB keyevent KEYCODE_BACK 逐层返回直到看到"工作台"入口
 func (n *Navigator) ReturnToHome() {
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 8; i++ {
 		if n.device.TextExists("工作台") {
 			slog.Debug("已回到工作台页面")
 			return
