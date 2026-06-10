@@ -104,6 +104,12 @@ type CheckinEntry struct {
 
 var defaultPublicManifestURL = "https://raw.githubusercontent.com/juice4927/tongkatong-update/main/version.json"
 
+// DefaultConfigJSON 返回默认配置的 JSON 字符串
+func DefaultConfigJSON() string {
+	data, _ := json.MarshalIndent(defaultConfig(), "", "  ")
+	return string(data)
+}
+
 func defaultConfig() *Config {
 	return &Config{
 		MuMu: MuMuConfig{

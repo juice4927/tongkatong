@@ -349,6 +349,37 @@ func (a *App) GetAvailablePackages() []string {
 	return packages
 }
 
+// TestConnection 测试 ADB 连接
+func (a *App) TestConnection() string {
+	if a.adbHelper == nil {
+		cfg := a.configManager.Config()
+		a.adbHelper = adb.NewADBHelper(cfg.MuMu.AdbPath)
+	}
+	ok, msg := a.adbHelper.Connect(a.configManager.Config().MuMu.Host, a.configManager.Config().MuMu.Port)
+	if ok {
+		version := a.adbHelper.Version()
+		a.adbHelper.Disconnect(a.configManager.Config().MuMu.Host, a.configManager.Config().MuMu.Port)
+		return "连接成功 · ADB " + version + " · " + msg
+	}
+	return "连接失败: " + msg
+}
+
+// GetDefaultConfig 返回默认配置 JSON
+func (a *App) GetDefaultConfig() string {
+	return config.DefaultConfigJSON()
+}
+
+// CheckHolidayUpdate 检查并更新节假日数据
+func (a *App) CheckHolidayUpdate() string {
+	if a.holidayChecker == nil {
+		return "请先连接设备"
+	}
+	ok := a.holidayChecker.TryUpdateFromRemote("https://raw.githubusercontent.com/juice4927/holiday-china/main/holidays.json")
+	if ok {
+		return "节假日数据已更新"
+	}
+	return "节假日数据已是最新或无网络"
+}
 // GetLogContent 获取日志文件内容
 func (a *App) GetLogContent() string {
 	logPath := filepath.Join(a.baseDir, "..", "logs")
