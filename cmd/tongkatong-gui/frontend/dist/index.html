@@ -677,8 +677,8 @@ async function importConfig(){const i=document.createElement('input');i.type='fi
 async function resetAll(){if(!confirm('确认恢复默认配置？'))return;const d=await call('GetDefaultConfig');if(d){const r=await call('SaveConfig',d);addLog('INFO',r||'已恢复默认');await loadConfig()}}
 
 // File browsing
-function browseAdb(){const i=document.createElement('input');i.type='file';i.accept='.exe';i.onchange=e=>{const f=e.target.files[0];if(f){mumuCfg.adb_path=f.name;addLog('INFO','已选择: '+f.name+f.size+'bytes')}};i.click()}
-function browseMumuDir(){const i=document.createElement('input');i.setAttribute('webkitsirectory','');i.setAttribute('directory','');i.onchange=e=>{const f=e.target.files[0];if(f){mumuCfg.mumu_exe_path=f.webkitRelativePath||f.name;addLog('INFO','已选择目录')}};i.click()}
+function browseAdb(){call('BrowseFile').then(p=>{if(p){mumuCfg.adb_path=p;addLog('INFO','已选择: '+p)}})}
+function browseMumuDir(){call('BrowseDirectory').then(p=>{if(p){mumuCfg.mumu_exe_path=p;addLog('INFO','已选择: '+p)}})}
 
 // Update
 async function checkAppUpdate(){addLog('INFO','检查更新...');updateStatus.value='检查中...'}

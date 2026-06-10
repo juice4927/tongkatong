@@ -380,6 +380,33 @@ func (a *App) CheckHolidayUpdate() string {
 	}
 	return "节假日数据已是最新或无网络"
 }
+
+// BrowseFile 打开原生文件选择器，返回选定文件路径（空串=取消）
+func (a *App) BrowseFile() string {
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择 ADB 可执行文件",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "可执行文件 (*.exe)", Pattern: "*.exe"},
+			{DisplayName: "所有文件 (*)", Pattern: "*"},
+		},
+	})
+	if err != nil || path == "" {
+		return ""
+	}
+	return path
+}
+
+// BrowseDirectory 打开原生目录选择器，返回选定目录路径（空串=取消）
+func (a *App) BrowseDirectory() string {
+	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择 MuMu 安装目录",
+	})
+	if err != nil || path == "" {
+		return ""
+	}
+	return path
+}
+
 // GetLogContent 获取日志文件内容
 func (a *App) GetLogContent() string {
 	logPath := filepath.Join(a.baseDir, "..", "logs")
