@@ -20,6 +20,12 @@ func main() {
 	stateDir := flag.String("state-dir", "", "状态文件目录")
 	version := flag.String("version", "", "目标版本")
 	prevVersion := flag.String("prev-version", "", "当前版本")
+	// passthroughArgs 收集传递给新版本的原始 CLI 参数
+	var passthroughArgs []string
+	flag.Func("passthrough-args", "透传原始 CLI 参数", func(s string) error {
+		passthroughArgs = append(passthroughArgs, s)
+		return nil
+	})
 	flag.Parse()
 
 	if *source == "" || *target == "" || *stateDir == "" {
@@ -82,8 +88,8 @@ func main() {
 	logger.Info("文件替换成功，启动新版本...")
 	writeState("success", "更新成功")
 
-	// 启动新版本
-	cmd := exec.Command(*target)
+	// 启动新版本（透传原始 CLI 参数）
+	cmd := exec.Command(*target, passthroughArgs...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {

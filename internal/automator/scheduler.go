@@ -67,7 +67,11 @@ func (s *CheckinScheduler) Stop() {
 	defer s.mu.Unlock()
 	if s.cron != nil && s.running {
 		ctx := s.cron.Stop()
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-time.After(30 * time.Second):
+			slog.Warn("调度器停止超时，强制清理")
+		}
 		s.running = false
 		s.jobs = make(map[string]*ScheduledJob)
 		s.entries = make(map[string]cron.EntryID)

@@ -244,7 +244,10 @@ func (cm *ConfigManager) loadMerged() *Config {
 		}
 		// 只覆盖文件中显式指定的顶级字段
 		var rawMap map[string]json.RawMessage
-		json.Unmarshal(data, &rawMap)
+		if err := json.Unmarshal(data, &rawMap); err != nil {
+			slog.Warn("配置文件 raw 解析失败，跳过合并", "path", filePath, "error", err)
+			return
+		}
 		mergeInto(cfg, &fileCfg, rawMap)
 	}
 

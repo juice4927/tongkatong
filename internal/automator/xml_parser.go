@@ -165,10 +165,14 @@ func parseBounds(bounds string) *Rect {
 	if len(m) != 5 {
 		return nil
 	}
-	x1, _ := strconv.Atoi(m[1])
-	y1, _ := strconv.Atoi(m[2])
-	x2, _ := strconv.Atoi(m[3])
-	y2, _ := strconv.Atoi(m[4])
+	x1, err1 := strconv.Atoi(m[1])
+	y1, err2 := strconv.Atoi(m[2])
+	x2, err3 := strconv.Atoi(m[3])
+	y2, err4 := strconv.Atoi(m[4])
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+		slog.Warn("bounds 解析失败：坐标值非法", "bounds", bounds)
+		return nil
+	}
 	return &Rect{X1: x1, Y1: y1, X2: x2, Y2: y2}
 }
 

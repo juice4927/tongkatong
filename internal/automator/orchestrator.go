@@ -39,6 +39,7 @@ type CheckinRecord struct {
 
 // NewCheckinOrchestrator 创建打卡协调器
 func NewCheckinOrchestrator(automator *UIAutomator2Impl, hc *holiday.HolidayChecker, cm *config.ConfigManager, baseDir string) *CheckinOrchestrator {
+	automator.SetBaseDir(baseDir)
 	return &CheckinOrchestrator{
 		automator:      automator,
 		holidayChecker: hc,

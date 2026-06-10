@@ -188,7 +188,9 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
 	if downloaded > 0 {
 		// 已有部分，先计算已下载部分的 hash
 		file.Seek(0, 0)
-		io.Copy(hasher, file)
+		if _, err := io.Copy(hasher, file); err != nil {
+			return fmt.Errorf("计算已下载部分 hash 失败: %w", err)
+		}
 		file.Seek(0, 2) // 回到末尾
 	}
 
@@ -200,12 +202,9 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			wn, writeErr := writer.Write(buf[:n])
+			_, writeErr := writer.Write(buf[:n])
 			if writeErr != nil {
 				return writeErr
-			}
-			if wn != n {
-				return io.ErrShortWrite
 			}
 			written += int64(n)
 			if progressCb != nil {
@@ -295,7 +294,7 @@ func ConsumeUpdateState(baseDir string) *UpdateState {
 // ── 更新启动器 ────────────────────────────────────────────────────
 
 // LaunchUpdater 启动更新器（独立进程）
-func LaunchUpdater(updaterExe, downloadedFile, currentExe, targetVersion, currentVersion string) error {
+func LaunchUpdater(updaterExe, downloadedFile, currentExe, targetVersion, currentVersion string, originalArgs []string) error {
 	// 检查更新器二进制是否存在
 	if _, err := os.Stat(updaterExe); err != nil {
 		return fmt.Errorf("更新器不存在: %s", updaterExe)
@@ -310,6 +309,10 @@ func LaunchUpdater(updaterExe, downloadedFile, currentExe, targetVersion, curren
 		"--state-dir", stateDir,
 		"--version", targetVersion,
 		"--prev-version", currentVersion,
+	}
+	// 透传原始 CLI 参数，以便新版本以相同模式启动
+	for _, a := range originalArgs {
+		args = append(args, "--passthrough-args", a)
 	}
 
 	cmd := exec.Command(updaterExe, args...)

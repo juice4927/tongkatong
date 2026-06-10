@@ -1,6 +1,6 @@
 module github.com/juice4927/tongkatong
 
-go 1.26.4
+go 1.22.0
 
 require (
 	github.com/robfig/cron/v3 v3.0.1

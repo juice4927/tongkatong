@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,9 @@ import (
 	"github.com/juice4927/tongkatong/internal/models"
 	"github.com/juice4927/tongkatong/internal/utils"
 )
+
+// packageNamePattern Android 包名校验（字母、数字、点、下划线）
+var packageNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._]*$`)
 
 // ── UIAutomator2Impl ──────────────────────────────────────────────
 
@@ -29,6 +33,8 @@ type UIAutomator2Impl struct {
 	mu        sync.Mutex
 	connected bool
 	deviceAddr string
+
+	baseDir   string // 工作目录，用于诊断文件输出
 
 	navigator *Navigator
 	verifier  *CheckinVerifier
@@ -54,6 +60,11 @@ func NewUIAutomator2Impl(host string, port int, adbPath string, packageName stri
 	impl.verifier = NewCheckinVerifier(impl, packageName)
 
 	return impl
+}
+
+// SetBaseDir 设置工作目录（用于诊断文件输出）
+func (u *UIAutomator2Impl) SetBaseDir(dir string) {
+	u.baseDir = dir
 }
 
 // Connect 连接设备
@@ -162,6 +173,11 @@ func (u *UIAutomator2Impl) TextExists(text string) bool {
 //
 //	先通过 monkey 方式启动；失败则查询 launcher activity 后使用 am start
 func (u *UIAutomator2Impl) OpenApp(packageName string) bool {
+	// 安全校验：包名只能是字母数字点下划线
+	if !packageNamePattern.MatchString(packageName) {
+		slog.Error("非法包名，拒绝执行", "package", packageName)
+		return false
+	}
 	// 方法1：monkey 启动（通用，适用于任何包名）
 	ok, _ := u.adbHelper.Shell("", fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", packageName), 10*time.Second)
 	if ok {
@@ -174,8 +190,11 @@ func (u *UIAutomator2Impl) OpenApp(packageName string) bool {
 		lines := strings.Split(strings.TrimSpace(activity), "\n")
 		lastLine := strings.TrimSpace(lines[len(lines)-1])
 		if lastLine != "" && strings.Contains(lastLine, "/") {
-			ok3, _ := u.adbHelper.Shell("", fmt.Sprintf("am start -n %s", lastLine), 10*time.Second)
-			return ok3
+			// 校验 activity 名称防止命令注入
+			if packageNamePattern.MatchString(strings.ReplaceAll(lastLine, "/", ".")) {
+				ok3, _ := u.adbHelper.Shell("", fmt.Sprintf("am start -n %s", lastLine), 10*time.Second)
+				return ok3
+			}
 		}
 	}
 
@@ -190,6 +209,10 @@ func (u *UIAutomator2Impl) OpenApp(packageName string) bool {
 
 // CloseApp 关闭应用
 func (u *UIAutomator2Impl) CloseApp(packageName string) bool {
+	if !packageNamePattern.MatchString(packageName) {
+		slog.Error("非法包名，拒绝执行", "package", packageName)
+		return false
+	}
 	ok, _ := u.adbHelper.Shell("", fmt.Sprintf("am force-stop %s", packageName), 5*time.Second)
 	return ok
 }
@@ -371,7 +394,7 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 		// 保存诊断信息（截图 + XML dump）
 		screenshotFn := func() ([]byte, error) { return u.Screenshot() }
 		xmlFn := func() (string, error) { return u.DumpHierarchy() }
-		utils.SaveFailureDiagnosis("", string(action), screenshotFn, xmlFn)
+		utils.SaveFailureDiagnosis(u.baseDir, string(action), screenshotFn, xmlFn)
 	}
 
 	// 8. 返回主页

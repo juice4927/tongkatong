@@ -4,6 +4,7 @@ package holiday
 import (
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -118,6 +119,9 @@ func (hc *HolidayChecker) UpdateData(data *HolidayData) error {
 
 // IsWorkday 判断是否为工作日
 func (hc *HolidayChecker) IsWorkday(checkDate time.Time) bool {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+
 	dateStr := checkDate.Format("2006-01-02")
 
 	// 用户配置最优先
@@ -176,15 +180,15 @@ func (hc *HolidayChecker) loadData() error {
 	// 尝试从内嵌数据加载
 	if len(embeddedHolidayJSON) > 0 {
 		var data HolidayData
-		if err := json.Unmarshal(embeddedHolidayJSON, &data); err == nil {
-			hc.data = &data
-			slog.Info("节假日内嵌数据加载成功")
-			return nil
+		if err := json.Unmarshal(embeddedHolidayJSON, &data); err != nil {
+			return fmt.Errorf("内嵌节假日数据解析失败: %w", err)
 		}
+		hc.data = &data
+		slog.Info("节假日内嵌数据加载成功")
+		return nil
 	}
 
-	slog.Warn("内嵌节假日数据为空或格式错误")
-	return nil
+	return fmt.Errorf("内嵌节假日数据为空")
 }
 
 func toSet(slice []string) map[string]bool {

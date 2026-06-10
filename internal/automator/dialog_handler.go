@@ -41,16 +41,16 @@ func (h *DialogHandler) ClickButtonByText(texts []string) bool {
 	}
 
 	if slices.Contains(texts, "取消") {
-		if found := h.clickByMirror("确定", screenW, true); found {
+		if found := h.clickByMirror("确定", screenW); found {
 			return true
 		}
-		if found := h.clickByMirror("确认", screenW, true); found {
+		if found := h.clickByMirror("确认", screenW); found {
 			return true
 		}
 	}
 
 	if slices.Contains(texts, "确定") || slices.Contains(texts, "确认") || slices.Contains(texts, "OK") {
-		if found := h.clickByMirror("取消", screenW, false); found {
+		if found := h.clickByMirror("取消", screenW); found {
 			return true
 		}
 	}
@@ -70,7 +70,7 @@ func (h *DialogHandler) ClickButtonByText(texts []string) bool {
 	return false
 }
 
-func (h *DialogHandler) clickByMirror(knowText string, screenW int, _ bool) bool {
+func (h *DialogHandler) clickByMirror(knowText string, screenW int) bool {
 	xml, err := h.device.DumpHierarchy()
 	if err != nil {
 		return false
