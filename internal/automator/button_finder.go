@@ -78,6 +78,9 @@ func isClickable(s string) bool { return s == "true" }
 // 策略 C: 兜底 — 文本包含匹配 + 放宽条件
 // 返回: (是否成功, error)
 func FindAndClickButton(action CheckinAction, device DeviceOperator) (bool, error) {
+	if device == nil {
+		return false, fmt.Errorf("device is nil")
+	}
 	xml, err := device.DumpHierarchy()
 	if err != nil {
 		return false, fmt.Errorf("dump hierarchy: %w", err)
