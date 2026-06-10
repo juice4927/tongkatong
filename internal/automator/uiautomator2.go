@@ -3,6 +3,8 @@ package automator
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -184,14 +186,33 @@ func (u *UIAutomator2Impl) TextExists(text string) bool {
 }
 
 // OpenApp 打开应用
+//
+//	先通过 monkey 方式启动；失败则查询 launcher activity 后使用 am start
 func (u *UIAutomator2Impl) OpenApp(packageName string) bool {
+	// 方法1：monkey 启动（通用，适用于任何包名）
 	ok, _ := u.adbHelper.Shell("", fmt.Sprintf("monkey -p %s -c android.intent.category.LAUNCHER 1", packageName), 10*time.Second)
-	if !ok {
-		// 备用：通过 am start
-		ok2, _ := u.adbHelper.Shell("", fmt.Sprintf("am start -n %s/.launch.WwMainActivity", packageName), 10*time.Second)
-		return ok2
+	if ok {
+		return true
 	}
-	return ok
+
+	// 方法2：查询 launcher activity 并启动（不再硬编码 WwMainActivity）
+	ok2, activity := u.adbHelper.Shell("", fmt.Sprintf("cmd package resolve-activity --brief %s 2>/dev/null || pm resolve-activity --brief %s 2>/dev/null", packageName, packageName), 10*time.Second)
+	if ok2 && activity != "" {
+		lines := strings.Split(strings.TrimSpace(activity), "\n")
+		lastLine := strings.TrimSpace(lines[len(lines)-1])
+		if lastLine != "" && strings.Contains(lastLine, "/") {
+			ok3, _ := u.adbHelper.Shell("", fmt.Sprintf("am start -n %s", lastLine), 10*time.Second)
+			return ok3
+		}
+	}
+
+	// 方法3：通用兜底 — 直接启动主 activity
+	ok4, _ := u.adbHelper.Shell("", fmt.Sprintf("am start -n %s/.MainActivity", packageName), 10*time.Second)
+	if ok4 {
+		return true
+	}
+	ok5, _ := u.adbHelper.Shell("", fmt.Sprintf("am start -n %s/.SplashActivity", packageName), 10*time.Second)
+	return ok5
 }
 
 // CloseApp 关闭应用
@@ -326,7 +347,14 @@ func (u *UIAutomator2Impl) DoCheckin(action CheckinAction) (*models.CheckinResul
 		message = "打卡失败"
 		failureCode = string(models.CheckinFailed)
 		// 截屏保存诊断
-		_, _ = u.Screenshot()
+		if data, err := u.Screenshot(); err == nil {
+			diagPath := filepath.Join("logs", "diagnosis")
+			_ = os.MkdirAll(diagPath, 0755)
+			ts := time.Now().Format("20060102_150405")
+			savePath := filepath.Join(diagPath, fmt.Sprintf("fail_%s_%s.png", action, ts))
+			_ = os.WriteFile(savePath, data, 0644)
+			slog.Info("失败诊断截图已保存", "path", savePath)
+		}
 	}
 
 	// 8. 返回主页
@@ -384,12 +412,8 @@ func (u *UIAutomator2Impl) findAndClickButton(text string) bool {
 		}
 	}
 
-	// 策略 C：兜底 — 按文本在屏幕中下部的比例位置点击
-	_, h, _ := u.WindowSize()
-	_, h2 := 0, h
-	_ = h2
-	slog.Info("兜底方案：尝试屏幕比例点击", "text", text)
-	// 尝试点击屏幕中下部位置（考勤按钮通常在 60%-70% Y 位置）
+	// 策略 C：兜底 — 用 contains 匹配文本，点击任何包含目标文字的可点击元素
+	slog.Info("兜底方案：尝试文本包含匹配", "text", text)
 	for _, n := range nodes {
 		if n.BoundsParsed == nil {
 			continue

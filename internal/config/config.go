@@ -273,6 +273,10 @@ func deepMergeMap(base, override map[string]json.RawMessage) {
 		if baseRaw, ok := base[k]; ok {
 			if err := json.Unmarshal(baseRaw, &baseVal); err == nil {
 				if err := json.Unmarshal(v, &overrideVal); err == nil {
+					// 两个都是对象 → 递归合并；确保 baseVal 非 nil
+					if baseVal == nil {
+						baseVal = make(map[string]json.RawMessage)
+					}
 					deepMergeMap(baseVal, overrideVal)
 					merged, _ := json.Marshal(baseVal)
 					base[k] = merged

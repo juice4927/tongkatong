@@ -328,7 +328,16 @@ func (a *App) GetAvailablePackages() []string {
 	if a.adbHelper == nil {
 		return nil
 	}
-	ok, out := a.adbHelper.Shell("", "pm list packages 2>/dev/null", 15*time.Second)
+	// 使用当前连接的设备（adb shell 默认选唯一设备，多设备时需指定）
+	serial := ""
+	devices := a.adbHelper.Devices()
+	for _, d := range devices {
+		if d.Status == "device" {
+			serial = d.Serial
+			break
+		}
+	}
+	ok, out := a.adbHelper.Shell(serial, "pm list packages 2>/dev/null", 15*time.Second)
 	if !ok {
 		return nil
 	}

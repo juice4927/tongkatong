@@ -266,7 +266,10 @@
           const cfgJson = await callBackend('GetConfigJSON');
           if (!cfgJson) {
             // Fallback: use hardcoded defaults
-            Object.assign(mumuCfg, { host: '127.0.0.1', port: 5555 });
+            Object.assign(mumuCfg, { host: '127.0.0.1', port: 5555, adb_path: '', mumu_exe_path: '', gps_latitude: 0, gps_longitude: 0 });
+            Object.assign(appCfg, { package_name: 'com.tencent.weworklocal', activity: '' });
+            Object.assign(notifyCfg, { enabled: false, webhook: '', verify_tls: true });
+            Object.assign(holidayCfg, { skip_weekend: true, skip_holiday: true, extra_workdays: [], extra_holidays: [] });
             return;
           }
           try {

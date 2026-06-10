@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -61,15 +62,41 @@ func (hc *HolidayChecker) SetLocalCachePath(path string) {
 }
 
 // TryUpdateFromRemote 尝试从远程更新节假日数据
+//
+//	下载远程 JSON 并更新本地数据 + 缓存。成功返回 true。
 func (hc *HolidayChecker) TryUpdateFromRemote(url string) bool {
 	if url == "" {
 		return false
 	}
 
 	slog.Info("检查节假日数据更新", "url", url)
-	// 这里由调用方下载 JSON 并调用 UpdateData 写入
-	// 具体下载逻辑在 updater 包中实现
-	return false
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		slog.Warn("节假日数据远程获取失败", "error", err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	var remoteData HolidayData
+	if err := json.NewDecoder(resp.Body).Decode(&remoteData); err != nil {
+		slog.Warn("节假日数据远程解析失败", "error", err)
+		return false
+	}
+
+	if len(remoteData.Holidays) == 0 {
+		slog.Warn("远程节假日数据为空，跳过更新")
+		return false
+	}
+
+	if err := hc.UpdateData(&remoteData); err != nil {
+		slog.Warn("节假日数据更新失败", "error", err)
+		return false
+	}
+
+	slog.Info("节假日数据远程更新成功", "holidays", len(remoteData.Holidays), "in_lieu", len(remoteData.InLieuDays))
+	return true
 }
 
 // UpdateData 更新节假日数据
