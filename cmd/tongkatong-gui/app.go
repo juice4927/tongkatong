@@ -16,6 +16,7 @@ import (
 	"github.com/juice4927/tongkatong/internal/config"
 	"github.com/juice4927/tongkatong/internal/holiday"
 	"github.com/juice4927/tongkatong/internal/models"
+	"github.com/juice4927/tongkatong/internal/updater"
 	"github.com/juice4927/tongkatong/internal/utils"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -865,4 +866,67 @@ func (a *App) GetLogContent() string {
 		return "日志文件不可用"
 	}
 	return string(data)
+}
+
+// CheckAppUpdate 检查软件更新（返回 JSON 格式的结果）
+func (a *App) CheckAppUpdate() string {
+	cfg := a.configManager.Config()
+	url := cfg.Update.ManifestURL
+	if url == "" {
+		url = "https://raw.githubusercontent.com/juice4927/tongkatong-update/main/version.json"
+	}
+	asset, needsUpdate, err := updater.CheckUpdate(url, models.Version, "default")
+	if err != nil {
+		return fmt.Sprintf(`{"error":"%s"}`, err.Error())
+	}
+	if !needsUpdate {
+		return `{"status":"已是最新","current":"` + models.Version + `"}`
+	}
+	return fmt.Sprintf(`{"status":"有新版本","current":"%s","latest":"%s","notes":"%s","size":%d}`,
+		models.Version, asset.Version, asset.Notes, asset.Size)
+}
+
+// ApplyUpdate 执行软件更新
+func (a *App) ApplyUpdate() string {
+	cfg := a.configManager.Config()
+	url := cfg.Update.ManifestURL
+	if url == "" {
+		url = "https://raw.githubusercontent.com/juice4927/tongkatong-update/main/version.json"
+	}
+	asset, needsUpdate, err := updater.CheckUpdate(url, models.Version, "default")
+	if err != nil {
+		return "检查更新失败: " + err.Error()
+	}
+	if !needsUpdate {
+		return "已是最新版本"
+	}
+
+	// 下载并启动更新器
+	exe, _ := os.Executable()
+	tmpDir := filepath.Join(os.TempDir(), updater.UpdateTempDir)
+	_ = os.MkdirAll(tmpDir, 0755)
+	destPath := filepath.Join(tmpDir, asset.FileName)
+
+	hash, err := updater.DownloadFile(asset.URL, destPath, nil)
+	if err != nil {
+		return "下载失败: " + err.Error()
+	}
+	if asset.SHA256 != "" && hash != asset.SHA256 {
+		return "SHA256 校验失败"
+	}
+
+	updaterExe := filepath.Join(filepath.Dir(exe), "tongkatong-updater.exe")
+	if err := updater.LaunchUpdater(updaterExe, destPath, exe, asset.Version, models.Version, os.Args[1:]); err != nil {
+		return "启动更新器失败: " + err.Error()
+	}
+	return "更新包已下载，程序即将更新重启"
+}
+
+// RefreshUpdateStatus 刷新更新状态
+func (a *App) RefreshUpdateStatus() string {
+	state := updater.ConsumeUpdateState(filepath.Dir(os.Args[0]))
+	if state == nil {
+		return "暂无更新记录"
+	}
+	return fmt.Sprintf("%s -> %s: %s", state.PreviousVersion, state.TargetVersion, state.Status)
 }

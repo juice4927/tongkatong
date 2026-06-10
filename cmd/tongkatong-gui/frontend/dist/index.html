@@ -693,9 +693,9 @@ function browseAdb(){call('BrowseFile').then(p=>{if(p){mumuCfg.adb_path=p;addLog
 function browseMumuDir(){call('BrowseDirectory').then(p=>{if(p){mumuCfg.mumu_exe_path=p;addLog('INFO','已选择: '+p)}})}
 
 // Update
-async function checkAppUpdate(){addLog('INFO','检查更新...');updateStatus.value='检查中...'}
-async function applyUpdate(){addLog('INFO','开始更新...')}
-async function refreshUpdateStatus(){updateStatus.value='已刷新'}
+async function checkAppUpdate(){const r=await call('CheckAppUpdate');addLog('INFO','更新: '+(r||'无响应'));try{const j=JSON.parse(r);updateStatus.value=j.status||j.error;if(j.latest)updateAvailable.value=true;updateDetail.value=r}catch(e){updateStatus.value=r}}
+async function applyUpdate(){updateStatus.value='下载中...';updateProgress.value=10;const r=await call('ApplyUpdate');addLog('INFO','更新: '+(r||'无响应'));updateStatus.value=r;updateProgress.value=-1}
+async function refreshUpdateStatus(){const r=await call('RefreshUpdateStatus');updateDetail.value=r||'暂无';addLog('INFO','更新状态: '+updateDetail.value)}
 
 // Logs
 async function refreshLog(){const c=await call('GetLogContent');if(c)logLines.value=c.split('\n');if(autoScroll.value)nextTick(()=>{if(logEl.value)logEl.value.scrollTop=logEl.value.scrollHeight})}
@@ -744,7 +744,7 @@ return{
   saveAllSettings,saveTimeConfig,exportConfig,importConfig,resetAll,
   browseAdb,browseMumuDir,checkAppUpdate,applyUpdate,refreshUpdateStatus,
   refreshLog,clearLogs,copyLog,refreshAll,
-  getCheckinRange,getSlotClass,onNotifyToggle:()=>{}
+  getCheckinRange,getSlotClass,onNotifyToggle(){notifyCfg.verify_tls=!notifyCfg.verify_tls}
 };
 }
 }).mount('#app');
