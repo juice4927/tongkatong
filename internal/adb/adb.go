@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -32,7 +31,6 @@ func (s *DeviceSession) IsExpired() bool {
 // ADBHelper ADB 辅助类
 type ADBHelper struct {
 	adbPath string
-	mu      sync.Mutex
 }
 
 // NewADBHelper 创建 ADBHelper，adbPath 为空时使用系统 PATH 中的 adb
@@ -43,17 +41,8 @@ func NewADBHelper(adbPath string) *ADBHelper {
 	return &ADBHelper{adbPath: adbPath}
 }
 
-// SetADBPath 设置 ADB 路径
-func (a *ADBHelper) SetADBPath(path string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.adbPath = path
-}
-
 // GetADBPath 获取当前 ADB 路径
 func (a *ADBHelper) GetADBPath() string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	return a.adbPath
 }
 

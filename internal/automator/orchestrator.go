@@ -267,9 +267,9 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 		return
 	}
 
-	// 设置 GPS
+	// 设置 GPS（两个坐标都非零时才设置）
 	cfg := co.configManager.Config()
-	if cfg.MuMu.GpsLatitude != 0 || cfg.MuMu.GpsLongitude != 0 {
+	if cfg.MuMu.GpsLatitude != 0 && cfg.MuMu.GpsLongitude != 0 {
 		if err := co.automator.SetGPS(cfg.MuMu.GpsLatitude, cfg.MuMu.GpsLongitude); err != nil {
 			slog.Warn("GPS 设置失败，继续尝试打卡", "error", err)
 		}

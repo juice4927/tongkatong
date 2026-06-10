@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // ── 正则常量 ──────────────────────────────────────────────────────
@@ -16,6 +17,11 @@ var (
 	timePattern   = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 	// 移除 XML 非法控制字符（保留 \x09 \x0a \x0d，移除其他 C0 控制字符）
 	invalidXML    = regexp.MustCompile(`[\x00-\x08\x0b\x0c\x0e-\x1f]`)
+	// 预编译热路径正则
+	nodeRe   = regexp.MustCompile(`<node\b([^>]*/?>)`)
+	boundsRe = regexp.MustCompile(`^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$`)
+	// 属性提取缓存
+	attrReCache sync.Map
 )
 
 // UINode UI 节点信息
@@ -122,8 +128,7 @@ func flattenNodes(xmlNodes []xmlNode, result *[]UINode) {
 // parseWithRegex 正则回退解析
 func parseWithRegex(xmlStr string) []UINode {
 	var nodes []UINode
-	re := regexp.MustCompile(`<node\b([^>]*/?>)`)
-	matches := re.FindAllStringSubmatch(xmlStr, -1)
+	matches := nodeRe.FindAllStringSubmatch(xmlStr, -1)
 
 	for _, m := range matches {
 		attrs := m[1]
@@ -146,8 +151,8 @@ func parseWithRegex(xmlStr string) []UINode {
 }
 
 func extractAttr(input, pattern string) string {
-	re := regexp.MustCompile(pattern)
-	m := re.FindStringSubmatch(input)
+	re, _ := attrReCache.LoadOrStore(pattern, regexp.MustCompile(pattern))
+	m := re.(*regexp.Regexp).FindStringSubmatch(input)
 	if len(m) > 1 {
 		return m[1]
 	}
@@ -160,9 +165,7 @@ func parseBounds(bounds string) *Rect {
 	if idx := strings.Index(bounds, "["); idx >= 0 {
 		bounds = bounds[idx:]
 	}
-	// 匹配 [x1,y1][x2,y2]
-	re := regexp.MustCompile(`^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$`)
-	m := re.FindStringSubmatch(bounds)
+	m := boundsRe.FindStringSubmatch(bounds)
 	if len(m) != 5 {
 		return nil
 	}

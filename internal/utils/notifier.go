@@ -49,7 +49,9 @@ func SendServerChan(sendkey string, title string, desp string, verifyTLS bool) b
 		var result map[string]interface{}
 
 		if isSuccess {
-			json.NewDecoder(resp.Body).Decode(&result)
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				slog.Debug("Server酱响应解析失败", "error", err)
+			}
 		}
 		resp.Body.Close()
 

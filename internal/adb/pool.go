@@ -3,6 +3,8 @@ package adb
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -81,8 +83,18 @@ func (p *DevicePool) CleanupExpired() {
 		if session.IsExpired() {
 			delete(p.sessions, addr)
 			slog.Debug("设备会话已过期，从池中移除", "address", addr)
+			// 断开 ADB 连接
+			parts := strings.SplitN(addr, ":", 2)
+			if len(parts) == 2 {
+				p.adb.Disconnect(parts[0], parsePort(parts[1]))
+			}
 		}
 	}
+}
+
+func parsePort(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // ListDevices 列出所有活跃设备

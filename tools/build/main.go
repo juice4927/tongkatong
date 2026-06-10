@@ -2,9 +2,11 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,17 +104,38 @@ func readCurrentVersion() string {
 func generateManifest(ver, distDir string) error {
 	owner := os.Getenv("GITHUB_REPOSITORY_OWNER")
 	if owner == "" {
-		owner = "juice4927" // 默认仓库所有者
+		owner = "juice4927"
 	}
+
+	fileName := fmt.Sprintf("tongkatong_v%s.exe", ver)
+	exePath := filepath.Join(distDir, fileName)
+
+	// 计算 SHA256 和文件大小
+	var sha256Str string
+	var fileSize int64
+	if fi, err := os.Stat(exePath); err == nil {
+		fileSize = fi.Size()
+		if f, err := os.Open(exePath); err == nil {
+			h := sha256.New()
+			io.Copy(h, f)
+			f.Close()
+			sha256Str = fmt.Sprintf("%x", h.Sum(nil))
+		}
+	}
+
 	manifest := map[string]interface{}{
 		"version": ver,
 		"assets": map[string]interface{}{
-			"default": map[string]string{
-				"file_name": fmt.Sprintf("tongkatong_v%s.exe", ver),
-				"url":       fmt.Sprintf("https://github.com/%s/tongkatong/releases/download/v%s/tongkatong_v%s.exe", owner, ver, ver),
+			"default": map[string]interface{}{
+				"version":      ver,
+				"file_name":    fileName,
+				"url":          fmt.Sprintf("https://github.com/%s/tongkatong/releases/download/v%s/%s", owner, ver, fileName),
+				"sha256":       sha256Str,
+				"size":         fileSize,
+				"published_at": time.Now().Format("2006-01-02"),
 			},
 		},
-		"notes":       fmt.Sprintf("通卡通 v%s 发布", ver),
+		"notes":        fmt.Sprintf("通卡通 v%s 发布", ver),
 		"published_at": time.Now().Format("2006-01-02"),
 	}
 

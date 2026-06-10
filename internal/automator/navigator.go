@@ -164,10 +164,8 @@ func (n *Navigator) ReturnToHome() {
 			return
 		}
 		// 发送系统返回键 (KEYCODE_BACK = 4)
-		if ierr, ok := n.device.(interface{ SendKeyEvent(int) error }); ok {
-			if err := ierr.SendKeyEvent(4); err != nil {
-				slog.Warn("发送返回键失败", "error", err)
-			}
+		if err := n.device.SendKeyEvent(4); err != nil {
+			slog.Warn("发送返回键失败", "error", err)
 		}
 		time.Sleep(1 * time.Second)
 	}

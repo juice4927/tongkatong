@@ -47,7 +47,7 @@ func main() {
 
 	logDir := filepath.Join(cfgDir, "..", "logs")
 	_ = utils.SetupLogging(logDir, "INFO", true)
-	slog.Info(fmt.Sprintf("%s v%s · %s", models.AppName, models.Version, models.BuildDate))
+	slog.Info("启动", "app", models.AppName, "version", models.Version, "build", models.BuildDate)
 
 	cm := config.NewConfigManager(cfgDir)
 	cfg := cm.Config()

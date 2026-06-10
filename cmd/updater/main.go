@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -104,9 +105,12 @@ func main() {
 
 	logger.Info("新版本已启动")
 
-	// 清理备份
+	// 清理下载包（仅删除临时目录下的文件，防止误删）
 	_ = os.Remove(backupPath)
-	_ = os.Remove(*source)
+	if strings.HasPrefix(filepath.Clean(*source), filepath.Clean(os.TempDir())) ||
+		strings.Contains(filepath.Clean(*source), "tongkatong_updates") {
+		_ = os.Remove(*source)
+	}
 
 	// 自删除：启动完成后退出
 	os.Exit(0)

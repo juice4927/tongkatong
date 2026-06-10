@@ -351,7 +351,7 @@ func (a *App) GetAvailablePackages() []string {
 
 // GetLogContent 获取日志文件内容
 func (a *App) GetLogContent() string {
-	logPath := filepath.Join(a.baseDir, "logs")
+	logPath := filepath.Join(a.baseDir, "..", "logs")
 	today := time.Now().Format("2006-01-02")
 	logFile := filepath.Join(logPath, "checkin_"+today+".log")
 

@@ -2,6 +2,7 @@ package automator
 
 import (
 	"math/rand"
+	"strings"
 	"time"
 )
 
@@ -48,12 +49,13 @@ func FormatTimeForDisplay(t time.Time) string {
 
 // parseTimeStr 解析 "HH:MM" → (hour, minute)
 func parseTimeStr(s string) (int, int) {
+	s = strings.TrimSpace(s)
 	if len(s) < 5 || s[2] != ':' {
 		return 0, 0
 	}
 	h := int(s[0]-'0')*10 + int(s[1]-'0')
 	m := int(s[3]-'0')*10 + int(s[4]-'0')
-	if h < 0 || h > 23 || m < 0 || m > 59 {
+	if h > 23 || m > 59 {
 		return 0, 0
 	}
 	return h, m

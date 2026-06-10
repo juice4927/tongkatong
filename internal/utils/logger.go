@@ -37,16 +37,14 @@ type LogManager struct {
 
 var (
 	globalManager *LogManager
-	globalMu      sync.Mutex
+	globalOnce    sync.Once
 )
 
-// GetLogManager 返回全局 LogManager 实例
+// GetLogManager 返回全局 LogManager 实例（线程安全单例）
 func GetLogManager() *LogManager {
-	globalMu.Lock()
-	defer globalMu.Unlock()
-	if globalManager == nil {
+	globalOnce.Do(func() {
 		globalManager = &LogManager{}
-	}
+	})
 	return globalManager
 }
 

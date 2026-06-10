@@ -86,8 +86,12 @@ func (v *CheckinVerifier) HandleConfirmDialog(timeout int) error {
 			return nil
 		}
 
-		// 无弹窗特征持续 8 秒后退出
-		if time.Since(start) > 8*time.Second {
+		// 无弹窗特征持续一段时间后提前退出
+		idleThreshold := 8 * time.Second
+		if maxWait := time.Duration(timeout) * time.Second; idleThreshold > maxWait {
+			idleThreshold = maxWait / 2
+		}
+		if time.Since(start) > idleThreshold {
 			slog.Debug("未检测到弹窗特征，提前退出")
 			return nil
 		}

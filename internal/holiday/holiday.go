@@ -163,6 +163,10 @@ func (hc *HolidayChecker) GetHolidayName(checkDate time.Time) string {
 	hc.mu.RLock()
 	defer hc.mu.RUnlock()
 
+	if hc.data == nil {
+		return ""
+	}
+
 	dateStr := checkDate.Format("2006-01-02")
 
 	if name, ok := hc.data.Holidays[dateStr]; ok {

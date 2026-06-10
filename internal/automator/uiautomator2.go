@@ -16,8 +16,8 @@ import (
 	"github.com/juice4927/tongkatong/internal/utils"
 )
 
-// packageNamePattern Android 包名校验（字母、数字、点、下划线）
-var packageNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._]*$`)
+// packageNamePattern Android 包名/activity名校验（字母、数字、点、下划线、$）
+var packageNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9._\$]*$`)
 
 // ── UIAutomator2Impl ──────────────────────────────────────────────
 

@@ -282,6 +282,10 @@ func mergeInto(dst, src *Config, rawMap map[string]json.RawMessage) {
 		if dst.Checkin == nil {
 			dst.Checkin = make(map[string]CheckinEntry)
 		}
+		// 解析用户 JSON 中 checkin 各条目的原始内容，用于判断字段是否显式指定
+		var rawCheckin map[string]json.RawMessage
+		_ = json.Unmarshal(rawMap["checkin"], &rawCheckin)
+
 		for k, v := range src.Checkin {
 			if existing, exists := dst.Checkin[k]; exists {
 				// 仅覆盖 src 中非零值的字段
@@ -291,8 +295,15 @@ func mergeInto(dst, src *Config, rawMap map[string]json.RawMessage) {
 				if len(v.TimeRange) > 0 {
 					existing.TimeRange = v.TimeRange
 				}
-				// enabled 是 bool，用 raw JSON 来判断是否显式指定
-				existing.Enabled = v.Enabled
+				// enabled 仅当用户 JSON 中显式写了该字段时才覆盖
+				if rawEntry, hasRaw := rawCheckin[k]; hasRaw {
+					var partial map[string]json.RawMessage
+					if json.Unmarshal(rawEntry, &partial) == nil {
+						if _, explicitEnabled := partial["enabled"]; explicitEnabled {
+							existing.Enabled = v.Enabled
+						}
+					}
+				}
 				dst.Checkin[k] = existing
 			} else {
 				dst.Checkin[k] = v

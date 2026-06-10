@@ -123,8 +123,9 @@ func CheckUpdate(manifestURL, currentVersion, edition string) (*UpdateAsset, boo
 // ProgressCallback 下载进度回调
 type ProgressCallback func(downloaded, total int64)
 
-// DownloadFile 下载文件（支持断点续传 + 流式 SHA256 校验）
-func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
+// DownloadFile 下载文件（支持断点续传 + SHA256 校验）
+// 返回下载后文件的 SHA256 十六进制字符串
+func DownloadFile(url, destPath string, progressCb ProgressCallback) (string, error) {
 	_ = os.MkdirAll(filepath.Dir(destPath), 0755)
 	partialPath := destPath + ".part"
 
@@ -136,7 +137,7 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if downloaded > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", downloaded))
@@ -145,23 +146,27 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
 	client := &http.Client{Timeout: 30 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return "", err
+	}
+
+	// 处理 416：部分下载无效，从头重新下载
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		resp.Body.Close()
+		downloaded = 0
+		// 先删除残缺的 .part 文件，避免残留数据污染
+		_ = os.Remove(partialPath)
+		req, err = http.NewRequest("GET", url, nil)
+		if err != nil {
+			return "", err
+		}
+		resp, err = client.Do(req)
+		if err != nil {
+			return "", err
+		}
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
-		// 416 表示文件已完整，直接进入校验
-		downloaded = 0
-		resp.Body.Close()
-		resp, err = client.Get(url)
-		if err != nil {
-			return err
-		}
-		defer resp.Body.Close()
-	}
-
 	var totalSize int64
-	// 尝试从 Content-Range 或 Content-Length 获取总大小
 	contentRange := resp.Header.Get("Content-Range")
 	if contentRange != "" {
 		if idx := strings.LastIndex(contentRange, "/"); idx >= 0 {
@@ -172,29 +177,29 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
 		totalSize = resp.ContentLength + downloaded
 	}
 
-	// 打开文件（追加或新建）
+	// 打开文件（追加或新建，重启时截断）
 	mode := os.O_CREATE | os.O_WRONLY
 	if downloaded > 0 && resp.StatusCode == http.StatusPartialContent {
 		mode |= os.O_APPEND
+	} else if downloaded == 0 {
+		mode |= os.O_TRUNC
 	}
 	file, err := os.OpenFile(partialPath, mode, 0644)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer file.Close()
 
 	// 流式计算 SHA256（从头开始校验）
 	hasher := sha256.New()
 	if downloaded > 0 {
-		// 已有部分，先计算已下载部分的 hash
 		file.Seek(0, 0)
 		if _, err := io.Copy(hasher, file); err != nil {
-			return fmt.Errorf("计算已下载部分 hash 失败: %w", err)
+			return "", fmt.Errorf("计算已下载部分 hash 失败: %w", err)
 		}
-		file.Seek(0, 2) // 回到末尾
+		file.Seek(0, 2)
 	}
 
-	// 同时写入文件和 hash 计算
 	writer := io.MultiWriter(file, hasher)
 	buf := make([]byte, ChunkSize)
 	written := downloaded
@@ -204,7 +209,7 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
 		if n > 0 {
 			_, writeErr := writer.Write(buf[:n])
 			if writeErr != nil {
-				return writeErr
+				return "", writeErr
 			}
 			written += int64(n)
 			if progressCb != nil {
@@ -215,19 +220,24 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) error {
 			break
 		}
 		if readErr != nil {
-			return readErr
+			return "", readErr
 		}
 	}
 
-	// 关闭文件以刷新
 	file.Close()
+
+	// 验证文件大小
+	if totalSize > 0 && written != totalSize {
+		return "", fmt.Errorf("下载不完整: 预期 %d 字节, 实际 %d 字节", totalSize, written)
+	}
 
 	// 重命名为目标文件
 	if err := os.Rename(partialPath, destPath); err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
+	hashStr := fmt.Sprintf("%x", hasher.Sum(nil))
+	return hashStr, nil
 }
 
 // SHA256File 计算文件 SHA256
