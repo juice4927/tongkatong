@@ -5,6 +5,9 @@
 *.out
 *.test.exe
 
+# Node
+node_modules/
+
 # IDE
 .idea/
 .vscode/
