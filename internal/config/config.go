@@ -230,60 +230,57 @@ func (cm *ConfigManager) writeConfig(cfg *Config) error {
 func (cm *ConfigManager) loadMerged() *Config {
 	cfg := defaultConfig()
 
-	mergedMap := make(map[string]json.RawMessage)
-	builtinData, _ := json.Marshal(cfg)
-	json.Unmarshal(builtinData, &mergedMap)
-
-	if data, err := os.ReadFile(filepath.Join(cm.configDir, "default.json")); err == nil {
-		var overrideMap map[string]json.RawMessage
-		if err := json.Unmarshal(data, &overrideMap); err == nil {
-			deepMergeMap(mergedMap, overrideMap)
+	// 对于每层文件，直接 JSON 解析出完整 Config，然后 field-by-field 合并
+	applyFile := func(filePath string) {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return
 		}
+		// 转为完整 Config 再合并
+		var fileCfg Config
+		if err := json.Unmarshal(data, &fileCfg); err != nil {
+			slog.Error("配置文件解析失败", "path", filePath, "error", err)
+			return
+		}
+		// 只覆盖文件中显式指定的顶级字段
+		var rawMap map[string]json.RawMessage
+		json.Unmarshal(data, &rawMap)
+		mergeInto(cfg, &fileCfg, rawMap)
 	}
 
+	applyFile(filepath.Join(cm.configDir, "default.json"))
 	userExists := true
-	if data, err := os.ReadFile(cm.configFile); err == nil {
-		var overrideMap map[string]json.RawMessage
-		if err := json.Unmarshal(data, &overrideMap); err == nil {
-			deepMergeMap(mergedMap, overrideMap)
-		}
-	} else if os.IsNotExist(err) {
+	if _, err := os.Stat(cm.configFile); err != nil {
 		userExists = false
-	}
-
-	mergedData, _ := json.Marshal(mergedMap)
-	var result Config
-	if err := json.Unmarshal(mergedData, &result); err != nil {
-		slog.Error("配置合并解析失败，使用内置默认", "error", err)
-		return cfg
+	} else {
+		applyFile(cm.configFile)
 	}
 
 	if !userExists {
-		cm.cfg = &result
-		_ = cm.writeConfig(&result)
+		_ = cm.writeConfig(cfg)
 	}
 
-	return &result
+	return cfg
 }
 
-// deepMergeMap 深度合并两个 JSON map（override 覆盖 base 的对应 key）
-func deepMergeMap(base, override map[string]json.RawMessage) {
-	for k, v := range override {
-		var baseVal, overrideVal map[string]json.RawMessage
-		if baseRaw, ok := base[k]; ok {
-			if err := json.Unmarshal(baseRaw, &baseVal); err == nil {
-				if err := json.Unmarshal(v, &overrideVal); err == nil {
-					// 两个都是对象 → 递归合并；确保 baseVal 非 nil
-					if baseVal == nil {
-						baseVal = make(map[string]json.RawMessage)
-					}
-					deepMergeMap(baseVal, overrideVal)
-					merged, _ := json.Marshal(baseVal)
-					base[k] = merged
-					continue
-				}
-			}
+// mergeInto 将 src 合并到 dst，只覆盖 rawMap 中显式指定的顶级字段
+func mergeInto(dst, src *Config, rawMap map[string]json.RawMessage) {
+	if _, ok := rawMap["mumu"]; ok { dst.MuMu = src.MuMu }
+	if _, ok := rawMap["app"]; ok { dst.App = src.App }
+	if _, ok := rawMap["holiday"]; ok { dst.Holiday = src.Holiday }
+	if _, ok := rawMap["notification"]; ok { dst.Notification = src.Notification }
+	if _, ok := rawMap["update"]; ok { dst.Update = src.Update }
+	if _, ok := rawMap["random_delay"]; ok { dst.RandomDelay = src.RandomDelay }
+	if _, ok := rawMap["app_state"]; ok { dst.AppState = src.AppState }
+	if _, ok := rawMap["makeup_window"]; ok { dst.MakeupWindow = src.MakeupWindow }
+	if _, ok := rawMap["advanced"]; ok { dst.Advanced = src.Advanced }
+	// Checkin map：逐条合并
+	if _, ok := rawMap["checkin"]; ok && src.Checkin != nil {
+		if dst.Checkin == nil {
+			dst.Checkin = make(map[string]CheckinEntry)
 		}
-		base[k] = v
+		for k, v := range src.Checkin {
+			dst.Checkin[k] = v
+		}
 	}
 }
