@@ -25,7 +25,7 @@ type UpdateAsset struct {
 	Version     string `json:"version"`
 	URL         string `json:"url"`
 	FileName    string `json:"file_name"`
-	SHA256     string `json:"sha256"`
+	SHA256      string `json:"sha256"`
 	Size        int    `json:"size"`
 	Notes       string `json:"notes"`
 	PublishedAt string `json:"published_at"`
@@ -48,10 +48,10 @@ type UpdateState struct {
 }
 
 const (
-	UpdateTempDir  = "tongkatong_updates"
+	UpdateTempDir   = "tongkatong_updates"
 	UpdateStateFile = "update_state.json"
-	MaxRetries     = 4
-	ChunkSize      = 512 * 1024
+	MaxRetries      = 4
+	ChunkSize       = 512 * 1024
 )
 
 // ── 版本比较 ──────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ func DownloadFile(url, destPath string, progressCb ProgressCallback) (string, er
 	}
 
 	// 打开文件（追加或新建，重启时截断）
-	mode := os.O_CREATE | os.O_WRONLY
+	mode := os.O_CREATE | os.O_RDWR
 	if downloaded > 0 && resp.StatusCode == http.StatusPartialContent {
 		mode |= os.O_APPEND
 	} else if downloaded == 0 {

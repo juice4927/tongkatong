@@ -30,11 +30,11 @@ type UIAutomator2Impl struct {
 	pool        *adb.DevicePool
 	adbHelper   *adb.ADBHelper
 
-	mu        sync.Mutex
-	connected bool
+	mu         sync.Mutex
+	connected  bool
 	deviceAddr string
 
-	baseDir   string // 工作目录，用于诊断文件输出
+	baseDir    string          // 工作目录，用于诊断文件输出
 	mumuHelper *adb.MuMuHelper // GPS 设置委托
 
 	navigator *Navigator
@@ -183,6 +183,62 @@ func (u *UIAutomator2Impl) TextExists(text string) bool {
 	return false
 }
 
+func (u *UIAutomator2Impl) currentActivity() string {
+	ok, out := u.adbHelper.Shell("", "dumpsys activity activities", 10*time.Second)
+	if !ok {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !(strings.Contains(line, "mResumedActivity") || strings.Contains(line, "topResumedActivity")) {
+			continue
+		}
+		fields := strings.Fields(line)
+		for _, field := range fields {
+			if strings.Contains(field, "/") && strings.Contains(field, u.packageName) {
+				return strings.TrimSpace(field)
+			}
+		}
+	}
+	return ""
+}
+
+func (u *UIAutomator2Impl) looksLikeMainActivity(activity string) bool {
+	if activity == "" {
+		return false
+	}
+	lower := strings.ToLower(activity)
+	if !strings.Contains(lower, strings.ToLower(u.packageName)) {
+		return false
+	}
+	mainHints := []string{
+		"main", "home", "index", "tab", "workbench", "launcher",
+		"mainwindow", "wwmainactivity", "appbrand",
+	}
+	for _, hint := range mainHints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+func (u *UIAutomator2Impl) waitForLoggedIn(waitSeconds int) bool {
+	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
+	lastLogAt := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(1 * time.Second)
+		if u.IsLoggedIn() && !u.IsOnLoginPage() {
+			return true
+		}
+		if time.Since(lastLogAt) >= 30*time.Second {
+			slog.Info("等待登录中...", "elapsed_seconds", int(time.Since(deadline.Add(-time.Duration(waitSeconds)*time.Second)).Seconds()))
+			lastLogAt = time.Now()
+		}
+	}
+	return false
+}
+
 // OpenApp 打开应用
 //
 //	先通过 monkey 方式启动；失败则查询 launcher activity 后使用 am start
@@ -292,12 +348,19 @@ func (u *UIAutomator2Impl) WaitForUIReady(timeout time.Duration, minNodes int) b
 // IsLoggedIn 检查是否已在交建通主界面（非登录页）
 func (u *UIAutomator2Impl) IsLoggedIn() bool {
 	xml, err := u.DumpHierarchy()
-	if err != nil {
-		return false
+	if err == nil {
+		lower := strings.ToLower(xml)
+		mainTexts := []string{
+			"工作台", "考勤", "首页", "消息", "通讯录", "我的", "待办",
+			"工作", "应用", "日程", "已打卡", "今日考勤",
+		}
+		for _, text := range mainTexts {
+			if strings.Contains(lower, strings.ToLower(text)) {
+				return true
+			}
+		}
 	}
-	// 检测工作台/考勤入口是否存在
-	lower := strings.ToLower(xml)
-	return strings.Contains(lower, "工作台") || strings.Contains(lower, "考勤")
+	return u.looksLikeMainActivity(u.currentActivity())
 }
 
 // IsOnLoginPage 检测是否在登录页面
@@ -308,7 +371,9 @@ func (u *UIAutomator2Impl) IsOnLoginPage() bool {
 	}
 	lower := strings.ToLower(xml)
 	return strings.Contains(lower, "登录") || strings.Contains(lower, "login") ||
-		strings.Contains(lower, "手机号") || strings.Contains(lower, "验证码")
+		strings.Contains(lower, "手机号") || strings.Contains(lower, "验证码") ||
+		strings.Contains(lower, "通过手机登录") || strings.Contains(lower, "扫码登录") ||
+		strings.Contains(lower, "确认登录") || strings.Contains(lower, "企业微信登录")
 }
 
 // HandleLoginIfNeeded 如果需要登录则等待用户手动登录
@@ -323,15 +388,42 @@ func (u *UIAutomator2Impl) HandleLoginIfNeeded(waitSeconds int) error {
 	}
 
 	slog.Info("检测到登录页面，等待手动登录", "max_wait", waitSeconds)
-	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
-	for time.Now().Before(deadline) {
-		time.Sleep(3 * time.Second)
-		if !u.IsOnLoginPage() && u.IsLoggedIn() {
-			slog.Info("用户已登录")
-			return nil
+	if u.TextExists("通过手机登录") {
+		slog.Info("检测到记忆登录入口，尝试点击「通过手机登录」")
+		if u.ClickText("通过手机登录") {
+			time.Sleep(1500 * time.Millisecond)
 		}
 	}
-	return fmt.Errorf("登录超时（%d秒），请先手动登录交建通", waitSeconds)
+
+	if u.waitForLoggedIn(waitSeconds) {
+		slog.Info("用户已登录")
+		return nil
+	}
+
+	slog.Warn("首次等待登录超时，尝试重开应用后再次检测")
+	u.CloseApp(u.packageName)
+	time.Sleep(2 * time.Second)
+	if !u.OpenApp(u.packageName) {
+		return fmt.Errorf("登录超时，且重开应用失败")
+	}
+	time.Sleep(4 * time.Second)
+
+	if u.TextExists("通过手机登录") {
+		slog.Info("重开后再次检测到记忆登录入口，尝试点击")
+		if u.ClickText("通过手机登录") {
+			time.Sleep(1500 * time.Millisecond)
+		}
+	}
+
+	secondWait := waitSeconds
+	if secondWait < 300 {
+		secondWait = 300
+	}
+	if u.waitForLoggedIn(secondWait) {
+		slog.Info("用户已登录")
+		return nil
+	}
+	return fmt.Errorf("登录超时（首次 %d 秒，重开后 %d 秒），请先手动登录交建通", waitSeconds, secondWait)
 }
 
 // SetGPS 通过 MuMuManager 设置 GPS 虚拟定位
@@ -374,7 +466,7 @@ func (u *UIAutomator2Impl) SetGPS(latitude, longitude float64) error {
 		return fmt.Errorf("GPS 设置失败: %v (output: %s)", err, string(output))
 	}
 	slog.Info("GPS 已设置", "lat", latitude, "lon", longitude)
-    return nil
+	return nil
 }
 
 // ── 打卡执行 ───────────────────────────────────────────────────────
@@ -517,9 +609,9 @@ func (u *UIAutomator2Impl) doCheckinOnce(action CheckinAction, actionText, slotL
 		if ae, ok := findErr.(*AlreadyCheckedInError); ok {
 			if ae.InCorrectSlot {
 				return &models.CheckinResult{
-					Success: true,
-					Action:  string(action),
-					Message: fmt.Sprintf("该时段已打卡 (%s)", ae.CheckinTime),
+					Success:   true,
+					Action:    string(action),
+					Message:   fmt.Sprintf("该时段已打卡 (%s)", ae.CheckinTime),
 					Timestamp: timestamp,
 				}, nil
 			}

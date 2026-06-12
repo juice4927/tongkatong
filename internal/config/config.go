@@ -50,16 +50,17 @@ type RandomDelayConfig struct {
 }
 
 type AppStateConfig struct {
-	AutoConnect                      bool `json:"auto_connect"`
-	AutoStart                        bool `json:"auto_start"`
-	KeepAliveEnabled                 bool `json:"keep_alive_enabled"`
-	RecoveryBaseBackoffSeconds       int  `json:"recovery_base_backoff_seconds"`
-	RecoveryMaxBackoffSeconds        int  `json:"recovery_max_backoff_seconds"`
-	RecoveryMaxFailures              int  `json:"recovery_max_failures"`
-	RecoveryPauseMinutesAfterMax     int  `json:"recovery_pause_minutes_after_max_failures"`
-	RecoveryQuietHoursEnabled        bool `json:"recovery_quiet_hours_enabled"`
-	RecoveryQuietStartHour           int  `json:"recovery_quiet_start_hour"`
-	RecoveryQuietEndHour             int  `json:"recovery_quiet_end_hour"`
+	AutoConnect                  bool `json:"auto_connect"`
+	AutoStart                    bool `json:"auto_start"`
+	BootAutoStart                bool `json:"boot_auto_start"`
+	KeepAliveEnabled             bool `json:"keep_alive_enabled"`
+	RecoveryBaseBackoffSeconds   int  `json:"recovery_base_backoff_seconds"`
+	RecoveryMaxBackoffSeconds    int  `json:"recovery_max_backoff_seconds"`
+	RecoveryMaxFailures          int  `json:"recovery_max_failures"`
+	RecoveryPauseMinutesAfterMax int  `json:"recovery_pause_minutes_after_max_failures"`
+	RecoveryQuietHoursEnabled    bool `json:"recovery_quiet_hours_enabled"`
+	RecoveryQuietStartHour       int  `json:"recovery_quiet_start_hour"`
+	RecoveryQuietEndHour         int  `json:"recovery_quiet_end_hour"`
 }
 
 type MakeupWindowConfig struct {
@@ -82,16 +83,16 @@ type AdvancedConfig struct {
 
 // Config 顶层配置结构
 type Config struct {
-	MuMu         MuMuConfig         `json:"mumu"`
+	MuMu         MuMuConfig              `json:"mumu"`
 	Checkin      map[string]CheckinEntry `json:"checkin"`
-	App          AppConfig          `json:"app"`
-	Holiday      HolidayConfig      `json:"holiday"`
-	Notification NotificationConfig `json:"notification"`
-	Update       UpdateConfig       `json:"update"`
-	RandomDelay  RandomDelayConfig  `json:"random_delay"`
-	AppState     AppStateConfig     `json:"app_state"`
-	MakeupWindow MakeupWindowConfig `json:"makeup_window"`
-	Advanced     AdvancedConfig     `json:"advanced"`
+	App          AppConfig               `json:"app"`
+	Holiday      HolidayConfig           `json:"holiday"`
+	Notification NotificationConfig      `json:"notification"`
+	Update       UpdateConfig            `json:"update"`
+	RandomDelay  RandomDelayConfig       `json:"random_delay"`
+	AppState     AppStateConfig          `json:"app_state"`
+	MakeupWindow MakeupWindowConfig      `json:"makeup_window"`
+	Advanced     AdvancedConfig          `json:"advanced"`
 }
 
 type CheckinEntry struct {
@@ -132,6 +133,7 @@ func defaultConfig() *Config {
 		},
 		RandomDelay: RandomDelayConfig{MinSeconds: 1, MaxSeconds: 5},
 		AppState: AppStateConfig{
+			BootAutoStart:                false,
 			KeepAliveEnabled:             true,
 			RecoveryBaseBackoffSeconds:   5,
 			RecoveryMaxBackoffSeconds:    300,
@@ -331,15 +333,33 @@ func (cm *ConfigManager) backupIfCorrupted() error {
 
 // mergeInto 将 src 合并到 dst，只覆盖 rawMap 中显式指定的顶级字段
 func mergeInto(dst, src *Config, rawMap map[string]json.RawMessage) {
-	if _, ok := rawMap["mumu"]; ok { dst.MuMu = src.MuMu }
-	if _, ok := rawMap["app"]; ok { dst.App = src.App }
-	if _, ok := rawMap["holiday"]; ok { dst.Holiday = src.Holiday }
-	if _, ok := rawMap["notification"]; ok { dst.Notification = src.Notification }
-	if _, ok := rawMap["update"]; ok { dst.Update = src.Update }
-	if _, ok := rawMap["random_delay"]; ok { dst.RandomDelay = src.RandomDelay }
-	if _, ok := rawMap["app_state"]; ok { dst.AppState = src.AppState }
-	if _, ok := rawMap["makeup_window"]; ok { dst.MakeupWindow = src.MakeupWindow }
-	if _, ok := rawMap["advanced"]; ok { dst.Advanced = src.Advanced }
+	if _, ok := rawMap["mumu"]; ok {
+		dst.MuMu = src.MuMu
+	}
+	if _, ok := rawMap["app"]; ok {
+		dst.App = src.App
+	}
+	if _, ok := rawMap["holiday"]; ok {
+		dst.Holiday = src.Holiday
+	}
+	if _, ok := rawMap["notification"]; ok {
+		dst.Notification = src.Notification
+	}
+	if _, ok := rawMap["update"]; ok {
+		dst.Update = src.Update
+	}
+	if _, ok := rawMap["random_delay"]; ok {
+		dst.RandomDelay = src.RandomDelay
+	}
+	if _, ok := rawMap["app_state"]; ok {
+		dst.AppState = src.AppState
+	}
+	if _, ok := rawMap["makeup_window"]; ok {
+		dst.MakeupWindow = src.MakeupWindow
+	}
+	if _, ok := rawMap["advanced"]; ok {
+		dst.Advanced = src.Advanced
+	}
 	// Checkin map：逐条合并（字段级别，防止只写 enabled 时丢失 time_range）
 	if _, ok := rawMap["checkin"]; ok && src.Checkin != nil {
 		if dst.Checkin == nil {
@@ -377,7 +397,14 @@ func mergeInto(dst, src *Config, rawMap map[string]json.RawMessage) {
 
 // ValidateConfig 验证配置有效性，返回 (是否有效, 错误消息)
 func (cm *ConfigManager) ValidateConfig() (bool, string) {
-	cfg := cm.Config()
+	return Validate(cm.Config())
+}
+
+// Validate 验证指定配置有效性，返回 (是否有效, 错误消息)
+func Validate(cfg *Config) (bool, string) {
+	if cfg == nil {
+		return false, "配置不能为空"
+	}
 
 	if cfg.MuMu.Port <= 0 || cfg.MuMu.Port > 65535 {
 		return false, fmt.Sprintf("端口号无效: %d（范围 1-65535）", cfg.MuMu.Port)

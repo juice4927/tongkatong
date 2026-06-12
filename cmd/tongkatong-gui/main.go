@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/juice4927/tongkatong/internal/config"
 	"github.com/juice4927/tongkatong/internal/models"
@@ -34,6 +35,16 @@ func getDefaultConfigDir() string {
 }
 
 func main() {
+	lock, alreadyRunning, err := acquireSingleInstance()
+	if err != nil {
+		slog.Warn("单实例保护初始化失败，将继续启动", "error", err)
+	} else if alreadyRunning {
+		showAlreadyRunningMessage(models.AppName, models.AppName+" 已经在运行中。\n\n请检查系统托盘，不要重复启动。")
+		os.Exit(0)
+	} else if lock != nil {
+		defer lock.Release()
+	}
+
 	// 配置目录
 	cfgDir := getDefaultConfigDir()
 	_ = os.MkdirAll(cfgDir, 0755)
@@ -48,13 +59,21 @@ func main() {
 
 	// 创建 App
 	app := NewApp(cm, cfgDir)
+	startHidden := false
+	for _, arg := range os.Args[1:] {
+		if strings.EqualFold(arg, "--start-hidden") {
+			startHidden = true
+			break
+		}
+	}
 
-	err := wails.Run(&options.App{
-		Title:     models.AppName + " v" + models.Version,
-		Width:     1024,
-		Height:    768,
-		MinWidth:  860,
-		MinHeight: 640,
+	err = wails.Run(&options.App{
+		Title:       models.AppName + " v" + models.Version,
+		Width:       1024,
+		Height:      768,
+		MinWidth:    860,
+		MinHeight:   640,
+		StartHidden: startHidden,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

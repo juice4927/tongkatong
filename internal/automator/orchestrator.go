@@ -17,16 +17,17 @@ import (
 
 // CheckinOrchestrator 打卡协调器
 type CheckinOrchestrator struct {
-	mu            sync.Mutex
-	automator     *UIAutomator2Impl
+	mu             sync.Mutex
+	automator      *UIAutomator2Impl
 	holidayChecker *holiday.HolidayChecker
-	configManager *config.ConfigManager
-	scheduler     *CheckinScheduler
-	baseDir       string
+	configManager  *config.ConfigManager
+	scheduler      *CheckinScheduler
+	baseDir        string
 
 	checkinTimes    map[string]time.Time
 	dailyResults    []CheckinRecord
 	scheduledDate   time.Time
+	summarySentDate string
 	runningJobIDs   map[string]bool
 	rescheduleTimer *time.Timer
 
@@ -34,16 +35,17 @@ type CheckinOrchestrator struct {
 	lastResultMeta string
 
 	// 事件回调（供 GUI 层注册）
-	onResult  func(result CheckinRecord)
-	onError   func(jobID string, err error)
+	onResult func(result CheckinRecord)
+	onError  func(jobID string, err error)
 }
 
 // CheckinRecord 打卡记录
 type CheckinRecord struct {
-	ActionName string
-	Success    bool
-	Message    string
-	Timestamp  string
+	JobID       string
+	ActionName  string
+	Success     bool
+	Message     string
+	Timestamp   string
 	FailureCode string
 }
 
@@ -108,6 +110,17 @@ func (co *CheckinOrchestrator) GetDailyResults() []CheckinRecord {
 	return result
 }
 
+// GetScheduledCheckinTimes 返回今天已生成的随机打卡时间
+func (co *CheckinOrchestrator) GetScheduledCheckinTimes() map[string]time.Time {
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	result := make(map[string]time.Time, len(co.checkinTimes))
+	for key, value := range co.checkinTimes {
+		result[key] = value
+	}
+	return result
+}
+
 // ── 调度 ───────────────────────────────────────────────────────────
 
 func (co *CheckinOrchestrator) scheduleToday(source string) {
@@ -144,6 +157,7 @@ func (co *CheckinOrchestrator) scheduleToday(source string) {
 	co.mu.Lock()
 	co.checkinTimes = times
 	co.scheduledDate = today
+	co.summarySentDate = ""
 	co.dailyResults = make([]CheckinRecord, 0)
 	co.mu.Unlock()
 
@@ -292,7 +306,14 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 		time.Sleep(30 * time.Second)
 		if !utils.CheckNetworkConnectivity(nil, 5*time.Second) {
 			slog.Error("网络仍不可用，跳过本次打卡")
-			co.recordResult(label, false, "网络不可用", time.Now().Format("2006-01-02 15:04:05"), string(models.NetworkError))
+			co.recordRecord(CheckinRecord{
+				JobID:       jobID,
+				ActionName:  label,
+				Success:     false,
+				Message:     "网络不可用",
+				Timestamp:   time.Now().Format("2006-01-02 15:04:05"),
+				FailureCode: string(models.NetworkError),
+			})
 			return
 		}
 	}
@@ -323,39 +344,26 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 	result, err := co.automator.DoCheckin(action)
 	if err != nil {
 		slog.Error("打卡异常", "label", label, "error", err)
-		co.recordResult(label, false, "异常: "+err.Error(), time.Now().Format("2006-01-02 15:04:05"), string(models.SystemError))
-		return
 	}
+	displayResult, record := buildExecutionRecord(jobID, label, result, err, time.Now())
 
 	co.mu.Lock()
-	co.lastResult = result
-	if result.Success {
+	co.lastResult = displayResult
+	if displayResult.Success {
 		co.lastResultMeta = "success"
 	} else {
-		co.lastResultMeta = result.FailureCode
+		co.lastResultMeta = displayResult.FailureCode
 	}
 	co.mu.Unlock()
 
-	co.recordResult(
-		result.Action,
-		result.Success,
-		result.Message,
-		result.Timestamp,
-		result.FailureCode,
-	)
+	co.recordRecord(record)
 
 	// 打卡结果通知
-	co.notifyResult(result)
+	co.notifyResult(displayResult)
 
 	// 触发 GUI 回调
 	if co.onResult != nil {
-		go co.onResult(CheckinRecord{
-			ActionName:  result.Action,
-			Success:     result.Success,
-			Message:     result.Message,
-			Timestamp:   result.Timestamp,
-			FailureCode: result.FailureCode,
-		})
+		go co.onResult(record)
 	}
 
 	// 检查是否需要发送每日汇总（当天最后一次打卡完成后）
@@ -363,18 +371,22 @@ func (co *CheckinOrchestrator) executeCheckin(action CheckinAction, jobID, label
 }
 
 func (co *CheckinOrchestrator) recordResult(actionName string, success bool, message, timestamp, failureCode string) {
-	co.mu.Lock()
-	co.dailyResults = append(co.dailyResults, CheckinRecord{
-		ActionName: actionName,
-		Success:    success,
-		Message:    message,
-		Timestamp:  timestamp,
+	co.recordRecord(CheckinRecord{
+		ActionName:  actionName,
+		Success:     success,
+		Message:     message,
+		Timestamp:   timestamp,
 		FailureCode: failureCode,
 	})
+}
+
+func (co *CheckinOrchestrator) recordRecord(record CheckinRecord) {
+	co.mu.Lock()
+	co.dailyResults = append(co.dailyResults, record)
 	co.mu.Unlock()
 
 	// 写入记录文件
-	utils.RecordCheckinResult(co.baseDir, actionName, success, message, timestamp)
+	utils.RecordCheckinResult(co.baseDir, record.ActionName, record.Success, record.Message, record.Timestamp)
 }
 
 func (co *CheckinOrchestrator) notifyResult(result *models.CheckinResult) {
@@ -392,6 +404,7 @@ func (co *CheckinOrchestrator) maybeSendDailySummary() {
 	co.mu.Lock()
 	results := make([]CheckinRecord, len(co.dailyResults))
 	copy(results, co.dailyResults)
+	lastSent := co.summarySentDate
 	co.mu.Unlock()
 
 	cfg := co.configManager.Config()
@@ -399,22 +412,92 @@ func (co *CheckinOrchestrator) maybeSendDailySummary() {
 		return
 	}
 
-	// 检查是否所有启用的打卡时段都已完成
-	allEnabled := 0
-	allDone := 0
-	for _, entry := range cfg.Checkin {
-		if entry.Enabled {
-			allEnabled++
+	today := time.Now().Format("2006-01-02")
+	if shouldSendDailySummary(results, cfg.Checkin, lastSent, today) {
+		co.mu.Lock()
+		if co.summarySentDate == today {
+			co.mu.Unlock()
+			return
 		}
-	}
-	for _, r := range results {
-		if r.Success {
-			allDone++
-		}
-	}
-	if allEnabled > 0 && allDone >= allEnabled {
+		co.summarySentDate = today
+		co.mu.Unlock()
 		co.sendDailySummary(results, cfg)
 	}
+}
+
+func buildExecutionRecord(jobID, label string, result *models.CheckinResult, err error, now time.Time) (*models.CheckinResult, CheckinRecord) {
+	displayAction := label
+	if displayAction == "" {
+		displayAction = jobID
+	}
+
+	if result == nil {
+		message := "异常"
+		if err != nil {
+			message = "异常: " + err.Error()
+		}
+		result = &models.CheckinResult{
+			Success:     false,
+			Action:      string(actionMap[jobID]),
+			Message:     message,
+			Timestamp:   now.Format("2006-01-02 15:04:05"),
+			FailureCode: string(models.SystemError),
+		}
+	}
+	if result.Timestamp == "" {
+		result.Timestamp = now.Format("2006-01-02 15:04:05")
+	}
+	if result.FailureCode == "" && !result.Success {
+		result.FailureCode = string(models.CheckinFailed)
+	}
+
+	displayResult := *result
+	displayResult.Action = displayAction
+	record := CheckinRecord{
+		JobID:       jobID,
+		ActionName:  displayAction,
+		Success:     displayResult.Success,
+		Message:     displayResult.Message,
+		Timestamp:   displayResult.Timestamp,
+		FailureCode: displayResult.FailureCode,
+	}
+	return &displayResult, record
+}
+
+func shouldSendDailySummary(results []CheckinRecord, checkins map[string]config.CheckinEntry, sentDate, today string) bool {
+	if sentDate == today {
+		return false
+	}
+	return hasCompletedEnabledSlots(results, checkins)
+}
+
+func hasCompletedEnabledSlots(results []CheckinRecord, checkins map[string]config.CheckinEntry) bool {
+	enabled := make(map[string]struct{})
+	labels := make(map[string]string)
+	for jobID, entry := range checkins {
+		if !entry.Enabled {
+			continue
+		}
+		enabled[jobID] = struct{}{}
+		if entry.Label != "" {
+			labels[entry.Label] = jobID
+		}
+	}
+	if len(enabled) == 0 {
+		return false
+	}
+
+	completed := make(map[string]struct{})
+	for _, result := range results {
+		jobID := result.JobID
+		if jobID == "" {
+			jobID = labels[result.ActionName]
+		}
+		if _, ok := enabled[jobID]; ok {
+			completed[jobID] = struct{}{}
+		}
+	}
+	return len(completed) >= len(enabled)
 }
 
 func (co *CheckinOrchestrator) sendDailySummary(results []CheckinRecord, cfg *config.Config) {
